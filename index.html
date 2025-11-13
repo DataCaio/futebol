@@ -25,12 +25,16 @@
         .page-section { display: none; }
         /* Mostra a seção ativa */
         .page-section.active { display: block; }
+        /* Botão de data ativo */
+        .pelada-date-btn.active {
+            background-color: #2563eb; /* bg-blue-600 */
+            color: white;
+        }
     </style>
 </head>
 <body class="bg-gray-100 font-sans">
 
     <!-- Configuração do Firebase e Módulos -->
-    <!-- **** CORREÇÃO 2: Garantindo que este é o ÚNICO script de módulo **** -->
     <script type="module">
         // Importações do Firebase
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -40,61 +44,61 @@
             onSnapshot, collection, query, where, Timestamp, setLogLevel
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // https://firebase.google.com/docs/web/setup#available-libraries
-
         // Your web app's Firebase configuration
         const firebaseConfig = {
-        apiKey: "AIzaSyAVfypZ0PfbOl-ijGoVkkB1MaK4_h-PNUQ",
-        authDomain: "gestaopelada-b0dc4.firebaseapp.com",
-        projectId: "gestaopelada-b0dc4",
-        storageBucket: "gestaopelada-b0dc4.firebasestorage.app",
-        messagingSenderId: "47202082426",
-        appId: "1:47202082426:web:015e4dd73d444f085fa5c3"
+            apiKey: "AIzaSyAVfypZ0PfbOl-ijGoVkkB1MaK4_h-PNUQ",
+            authDomain: "gestaopelada-b0dc4.firebaseapp.com",
+            projectId: "gestaopelada-b0dc4",
+            storageBucket: "gestaopelada-b0dc4.firebasestorage.app",
+            messagingSenderId: "47202082426",
+            appId: "1:47202082426:web:015e4dd73d444f085fa5c3"
         };
 
         let db, auth;
-        let userId = 'default-user'; // Será atualizado pela autenticação
+        let userId = 'default-user';
         
-        // Coleções do Firestore (usando o caminho PÚBLICO para ser compartilhado)
+        // --- ESTADO GLOBAL DE DATA ---
+        const today = new Date();
+        let selectedYear = today.getFullYear();
+        let selectedMonth = today.getMonth() + 1; // 1 (Jan) - 12 (Dez)
+        let selectedPeladaDate = ""; // ex: "2025-11-17"
+        
+        // Funções para "desinscrever" dos listeners antigos
+        let unsubMensalistas = null;
+        let unsubProximaPelada = null;
+        let unsubCaixa = null;
+        
+        const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+        // Gera o sufixo da coleção, ex: "2025_11"
+        const getMonthSuffix = () => `${selectedYear}_${String(selectedMonth).padStart(2, '0')}`;
+        
+        // Coleções do Firestore
         const getCollection = (collectionName) => {
-            // Caminho simplificado para o modo de produção
-            // (ex: 'mensalistas_novembro', 'caixa_novembro', etc)
             return collection(db, collectionName);
         }
+        
         // --- Inicialização ---
         document.addEventListener('DOMContentLoaded', async () => {
             try {
-                // Habilita logs de debug (útil para desenvolvimento)
                 setLogLevel('Debug');
                 
-                // Inicializa Firebase
-                if (firebaseConfig.apiKey === "SEU_API_KEY") {
-                    console.error("ERRO: Configure o firebaseConfig!");
-                    document.getElementById('loading-global').innerHTML = '<p class="text-red-500">Erro: O app não foi configurado. Cole o `firebaseConfig` no index.html.</p>';
-                    return;
-                }
-                
-                // *** REMOVIDO: const app duplicada ***
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
                 
-                // Persistência em memória para evitar erros em iframes
                 await setPersistence(auth, inMemoryPersistence);
 
-                // Autenticação
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         console.log("Usuário autenticado:", user.uid);
                         userId = user.uid;
-                        // Agora que estamos logados, iniciamos os listeners
                         initializeAppListeners();
                     } else {
                         console.log("Usuário não autenticado.");
                     }
                 });
 
-                // Tenta login anônimo
                 await signInAnonymously(auth);
 
             } catch (error) {
@@ -107,8 +111,11 @@
         function initializeAppListeners() {
             initNavigation();
             
-            // Inicia os listeners de dados em tempo real
-            // *** REMOVIDO: listenRankingOriginal(); ***
+            // Renderiza os seletores de data
+            renderMonthSelectors();
+            renderPeladaSelectors(); // Isso vai definir a selectedPeladaDate inicial
+            
+            // Inicia os listeners de dados em tempo real com o mês/semana padrão
             listenMensalistas();
             listenProximaPelada();
             listenCaixa();
@@ -124,12 +131,104 @@
             showPage('home');
         }
 
-        // --- 1. Navegação (SPA) ---
-        function initNavigation() {
-            // Adiciona ícones
-            lucide.createIcons();
+        // --- 1. Navegação (SPA) e Seletores de Data ---
+        
+        function renderMonthSelectors() {
+            const container = document.getElementById('month-selector-container');
+            let yearHtml = '<select id="year-select" class="p-2 border rounded-lg bg-white">';
+            for (let y = today.getFullYear() - 1; y <= today.getFullYear() + 1; y++) {
+                yearHtml += `<option value="${y}" ${y === selectedYear ? 'selected' : ''}>${y}</option>`;
+            }
+            yearHtml += '</select>';
             
-            // Adiciona listeners aos botões de navegação
+            let monthHtml = '<select id="month-select" class="p-2 border rounded-lg bg-white">';
+            meses.forEach((mes, index) => {
+                const monthValue = index + 1;
+                monthHtml += `<option value="${monthValue}" ${monthValue === selectedMonth ? 'selected' : ''}>${mes}</option>`;
+            });
+            monthHtml += '</select>';
+            
+            container.innerHTML = monthHtml + yearHtml;
+            
+            // Adiciona listeners para trocar o mês/ano
+            document.getElementById('month-select').addEventListener('change', (e) => {
+                selectedMonth = parseInt(e.target.value);
+                console.log(`Mês alterado para: ${getMonthSuffix()}`);
+                // Recarrega os dados do mês
+                listenMensalistas();
+                listenCaixa();
+                updateSectionTitles();
+            });
+            document.getElementById('year-select').addEventListener('change', (e) => {
+                selectedYear = parseInt(e.target.value);
+                console.log(`Ano alterado para: ${getMonthSuffix()}`);
+                // Recarrega os dados do mês
+                listenMensalistas();
+                listenCaixa();
+                updateSectionTitles();
+            });
+            
+            updateSectionTitles();
+        }
+        
+        function updateSectionTitles() {
+            const mesNome = meses[selectedMonth - 1];
+            document.getElementById('mensalistas-title').innerText = `Mensalistas - ${mesNome} ${selectedYear}`;
+            document.getElementById('caixa-title').innerText = `Caixa - ${mesNome} ${selectedYear}`;
+        }
+        
+        // Gera as próximas 4 segundas-feiras
+        function getNextMondays() {
+            let mondays = [];
+            let date = new Date();
+            // Encontra a próxima segunda (ou hoje se for segunda)
+            let day = date.getDay();
+            let add = (day === 1) ? 0 : (8 - day) % 7; // Dias até a próxima segunda
+            date.setDate(date.getDate() + add);
+
+            for (let i = 0; i < 4; i++) {
+                let dateString = date.toISOString().split('T')[0]; // "YYYY-MM-DD"
+                let label = date.toLocaleDateString('pt-BR', { month: 'short', day: 'numeric' }); // "17 nov"
+                mondays.push({ dateString, label });
+                date.setDate(date.getDate() + 7); // Próxima semana
+            }
+            return mondays;
+        }
+
+        function renderPeladaSelectors() {
+            const container = document.getElementById('pelada-selector-container');
+            const mondays = getNextMondays();
+            
+            // Define a data da pelada padrão como a próxima segunda
+            selectedPeladaDate = mondays[0].dateString;
+            
+            let html = '';
+            mondays.forEach((mon, index) => {
+                html += `<button class="pelada-date-btn ${index === 0 ? 'active' : ''} p-2 px-4 border rounded-lg" data-date="${mon.dateString}">
+                    ${mon.label}
+                </button>`;
+            });
+            container.innerHTML = html;
+            
+            // Adiciona listeners aos botões
+            document.querySelectorAll('.pelada-date-btn').forEach(button => {
+                button.addEventListener('click', () => {
+                    // Atualiza UI
+                    document.querySelectorAll('.pelada-date-btn').forEach(btn => btn.classList.remove('active'));
+                    button.classList.add('active');
+                    
+                    // Atualiza estado e recarrega dados
+                    selectedPeladaDate = button.dataset.date;
+                    console.log(`Data da pelada alterada para: ${selectedPeladaDate}`);
+                    listenProximaPelada();
+                    document.getElementById('proxima-pelada-title').innerText = `Próxima Pelada - ${button.innerText}`;
+                });
+            });
+            document.getElementById('proxima-pelada-title').innerText = `Próxima Pelada - ${mondays[0].label}`;
+        }
+        
+        function initNavigation() {
+            lucide.createIcons();
             document.querySelectorAll('[data-page]').forEach(button => {
                 button.addEventListener('click', () => {
                     const pageId = button.getAttribute('data-page');
@@ -139,16 +238,14 @@
         }
 
         function showPage(pageId) {
-            // Esconde todas as seções
+            // ... (código de navegação existente, sem alterações) ...
             document.querySelectorAll('.page-section').forEach(section => {
                 section.classList.remove('active');
             });
-            // Mostra a seção ativa
             const activePage = document.getElementById(`page-${pageId}`);
             if (activePage) {
                 activePage.classList.add('active');
             }
-            // Atualiza o estado visual do menu
             document.querySelectorAll('[data-page]').forEach(button => {
                 button.classList.remove('bg-gray-700', 'text-white');
                 button.classList.add('text-gray-300', 'hover:bg-gray-700', 'hover:text-white');
@@ -157,17 +254,21 @@
                     button.classList.remove('text-gray-300', 'hover:bg-gray-700', 'hover:text-white');
                 }
             });
-            console.log(`Navegando para: ${pageId}`);
         }
 
-        // *** REMOVIDO: Função listenRankingOriginal() ***
-
-        // --- 3. Mensalistas ---
+        // --- 3. Mensalistas (com lógica de pagamento) ---
         function listenMensalistas() {
-            // Por enquanto, fixo em Novembro como você pediu
-            const collectionRef = getCollection('mensalistas_novembro');
+            // Desinscreve do listener antigo
+            if (unsubMensalistas) {
+                unsubMensalistas();
+                console.log("Listener de mensalistas anterior removido.");
+            }
             
-            onSnapshot(collectionRef, (snapshot) => {
+            const collectionName = `mensalistas_${getMonthSuffix()}`;
+            console.log(`Ouvindo coleção: ${collectionName}`);
+            const collectionRef = getCollection(collectionName);
+            
+            unsubMensalistas = onSnapshot(collectionRef, (snapshot) => {
                 const mensalistas = [];
                 snapshot.forEach(doc => {
                     mensalistas.push({ id: doc.id, ...doc.data() });
@@ -182,7 +283,7 @@
         function renderMensalistas(mensalistas) {
             const container = document.getElementById('mensalistas-container');
             if (mensalistas.length === 0) {
-                container.innerHTML = '<p class="text-gray-500">Nenhum mensalista cadastrado para Novembro.</p>';
+                container.innerHTML = `<p class="text-gray-500">Nenhum mensalista cadastrado para ${meses[selectedMonth-1]}.</p>`;
                 return;
             }
             
@@ -198,7 +299,7 @@
                             <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">
                                 ${player.status}
                             </span>
-                            <button data-id="${player.id}" data-status="${isPago ? 'Não' : 'Pago'}" class="toggle-status-btn p-2 rounded-full hover:bg-gray-100">
+                            <button data-id="${player.id}" class="toggle-status-btn p-2 rounded-full hover:bg-gray-100">
                                 <i data-lucide="${isPago ? 'rotate-ccw' : 'check'}"></i>
                             </button>
                         </div>
@@ -208,7 +309,6 @@
             html += '</ul>';
             container.innerHTML = html;
             
-            // Re-adiciona ícones e listeners
             lucide.createIcons();
             document.querySelectorAll('.toggle-status-btn').forEach(button => {
                 button.addEventListener('click', toggleMensalistaStatus);
@@ -218,14 +318,41 @@
         async function toggleMensalistaStatus(event) {
             const button = event.currentTarget;
             const docId = button.dataset.id;
-            const newStatus = button.dataset.status;
             
-            const docRef = doc(db, 'mensalistas_novembro', docId);
+            const currentMonthSuffix = getMonthSuffix();
+            const docRef = doc(db, `mensalistas_${currentMonthSuffix}`, docId);
+            
             try {
+                // 1. Pega o documento para saber o status ATUAL
+                const docSnap = await getDoc(docRef);
+                if (!docSnap.exists()) {
+                    console.error("Mensalista não encontrado!");
+                    return;
+                }
+                
+                const mensalista = docSnap.data();
+                const currentStatus = mensalista.status;
+                const newStatus = (currentStatus === 'Pago') ? 'Não' : 'Pago';
+
+                // 2. Atualiza o status do mensalista
                 await updateDoc(docRef, { status: newStatus });
                 console.log(`Status do ${docId} atualizado para ${newStatus}`);
+
+                // 3. **** NOVA LÓGICA ****
+                // Se o status mudou de "Não" para "Pago", adiciona R$ 49,00 ao caixa
+                if (currentStatus === 'Não' && newStatus === 'Pago') {
+                    console.log(`Detectado 1º pagamento para ${mensalista.nome}. Adicionando R$ 49,00 ao caixa.`);
+                    
+                    const caixaCollectionRef = getCollection(`caixa_${currentMonthSuffix}`);
+                    await addDoc(caixaCollectionRef, {
+                        descricao: `Pagamento Mensal - ${mensalista.nome}`,
+                        valor: 49.00,
+                        data: Timestamp.now()
+                    });
+                }
+                
             } catch (error) {
-                console.error("Erro ao atualizar status: ", error);
+                console.error("Erro ao atualizar status ou adicionar ao caixa: ", error);
             }
         }
         
@@ -235,7 +362,7 @@
             const nome = form.nome.value.trim();
             if (!nome) return;
             
-            const collectionRef = getCollection('mensalistas_novembro');
+            const collectionRef = getCollection(`mensalistas_${getMonthSuffix()}`);
             try {
                 await addDoc(collectionRef, {
                     nome: nome,
@@ -248,11 +375,17 @@
             }
         }
 
-        // --- 4. Próxima Pelada ---
+        // --- 4. Próxima Pelada (por data) ---
         function listenProximaPelada() {
-            const collectionRef = getCollection('proxima_pelada');
+            if (unsubProximaPelada) {
+                unsubProximaPelada();
+            }
             
-            onSnapshot(collectionRef, (snapshot) => {
+            const collectionName = `pelada_${selectedPeladaDate}`;
+            console.log(`Ouvindo coleção: ${collectionName}`);
+            const collectionRef = getCollection(collectionName);
+            
+            unsubProximaPelada = onSnapshot(collectionRef, (snapshot) => {
                 const jogadores = [];
                 snapshot.forEach(doc => {
                     jogadores.push({ id: doc.id, ...doc.data() });
@@ -266,12 +399,15 @@
         
         function renderProximaPelada(jogadores) {
             const container = document.getElementById('proxima-lista');
+            document.getElementById('player-count').innerText = `(${jogadores.length} confirmados)`;
+            
             if (jogadores.length === 0) {
-                container.innerHTML = '<p class="text-gray-500">Ninguém confirmado ainda.</p>';
+                container.innerHTML = `<p class="text-gray-500">Ninguém confirmado para ${selectedPeladaDate}.</p>`;
                 return;
             }
             
             let html = '<ul class="divide-y divide-gray-200">';
+            // ... (renderização da lista, sem alterações) ...
             jogadores.forEach(player => {
                 const tipoClass = player.tipo === 'Mensalista' ? 'text-blue-600' : 'text-orange-600';
                 
@@ -293,7 +429,6 @@
             html += '</ul>';
             container.innerHTML = html;
             
-            // Re-adiciona ícones e listeners
             lucide.createIcons();
             document.querySelectorAll('.remove-player-btn').forEach(button => {
                 button.addEventListener('click', removePlayerProxima);
@@ -309,14 +444,14 @@
             
             const valor = (tipo === 'Mensalista') ? 12.25 : 16.00;
             
-            const collectionRef = getCollection('proxima_pelada');
+            const collectionRef = getCollection(`pelada_${selectedPeladaDate}`);
             try {
                 await addDoc(collectionRef, {
                     nome: nome,
                     tipo: tipo,
                     valor: valor
                 });
-                console.log(`Jogador ${nome} adicionado à próxima pelada.`);
+                console.log(`Jogador ${nome} adicionado à pelada ${selectedPeladaDate}.`);
                 form.reset();
             } catch (error) {
                 console.error("Erro ao adicionar jogador: ", error);
@@ -327,7 +462,7 @@
             const button = event.currentTarget;
             const docId = button.dataset.id;
             
-            const docRef = doc(db, 'proxima_pelada', docId);
+            const docRef = doc(db, `pelada_${selectedPeladaDate}`, docId);
             try {
                 await deleteDoc(docRef);
                 console.log(`Jogador ${docId} removido.`);
@@ -336,17 +471,21 @@
             }
         }
 
-        // --- 5. Caixa da Pelada ---
+        // --- 5. Caixa da Pelada (por mês) ---
         function listenCaixa() {
-            // Fixo em Novembro por enquanto
-            const collectionRef = getCollection('caixa_novembro');
+            if (unsubCaixa) {
+                unsubCaixa();
+            }
             
-            onSnapshot(collectionRef, (snapshot) => {
+            const collectionName = `caixa_${getMonthSuffix()}`;
+            console.log(`Ouvindo coleção: ${collectionName}`);
+            const collectionRef = getCollection(collectionName);
+            
+            unsubCaixa = onSnapshot(collectionRef, (snapshot) => {
                 const transacoes = [];
                 snapshot.forEach(doc => {
                     transacoes.push({ id: doc.id, ...doc.data() });
                 });
-                // Ordenar por data (se houver)
                 transacoes.sort((a, b) => (b.data?.seconds || 0) - (a.data?.seconds || 0));
                 renderCaixa(transacoes);
             }, (error) => {
@@ -363,8 +502,9 @@
             let html = '<ul class="divide-y divide-gray-200">';
             
             if (transacoes.length === 0) {
-                html = '<p class="text-gray-500">Nenhuma transação registrada em Novembro.</p>';
+                html = `<p class="text-gray-500">Nenhuma transação registrada para ${meses[selectedMonth-1]}.</p>`;
             } else {
+                // ... (renderização da lista, sem alterações) ...
                 transacoes.forEach(t => {
                     const isEntrada = t.valor > 0;
                     const valorClass = isEntrada ? 'text-green-600' : 'text-red-600';
@@ -388,7 +528,6 @@
             
             container.innerHTML = html;
             
-            // Atualiza Saldo
             const saldoClass = saldo >= 0 ? 'text-green-600' : 'text-red-600';
             saldoEl.innerHTML = `Saldo Final: <span class="font-bold ${saldoClass}">R$ ${saldo.toFixed(2).replace('.', ',')}</span>`;
             
@@ -402,16 +541,15 @@
             const valor = parseFloat(form.valor.value);
             
             if (!descricao || isNaN(valor) || valor === 0) {
-                // Não usar alert()
                 console.warn("Tentativa de submissão de formulário de caixa inválido.");
                 return;
             }
             
-            const collectionRef = getCollection('caixa_novembro');
+            const collectionRef = getCollection(`caixa_${getMonthSuffix()}`);
             try {
                 await addDoc(collectionRef, {
                     descricao: descricao,
-                    valor: valor, // O valor já está positivo ou negativo
+                    valor: valor,
                     data: Timestamp.now()
                 });
                 console.log(`Transação ${descricao} adicionada.`);
@@ -460,7 +598,6 @@
                     <button data-page="caixa" class="flex items-center gap-2 px-4 py-3 text-sm font-medium">
                         <i data-lucide="piggy-bank" class="w-4 h-4"></i> Caixa
                     </button>
-                    <!-- *** REMOVIDO: Botão do Ranking *** -->
                 </div>
             </nav>
         </header>
@@ -485,7 +622,13 @@
             <!-- ========= SEÇÃO 1: MENSALISTAS ========= -->
             <section id="page-mensalistas" class="page-section space-y-6">
                 <div class="bg-white p-6 rounded-lg shadow">
-                    <h2 class="text-2xl font-bold mb-4">Mensalistas - Novembro</h2>
+                    <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                        <h2 id="mensalistas-title" class="text-2xl font-bold">Mensalistas</h2>
+                        <!-- NOVO: Seletor de Mês/Ano -->
+                        <div id="month-selector-container" class="flex gap-2">
+                            <!-- Dropdowns de Mês/Ano serão inseridos aqui -->
+                        </div>
+                    </div>
                     
                     <form id="form-add-mensalista" class="flex gap-2 mb-4">
                         <input type="text" name="nome" placeholder="Nome do mensalista" class="flex-grow p-2 border rounded-lg" required>
@@ -497,7 +640,6 @@
                 
                 <div class="bg-white rounded-lg shadow overflow-hidden">
                     <div id="mensalistas-container" class="p-4">
-                        <!-- Lista de mensalistas será renderizada aqui -->
                         <p>Carregando mensalistas...</p>
                     </div>
                 </div>
@@ -506,7 +648,14 @@
             <!-- ========= SEÇÃO 2: PRÓXIMA PELADA ========= -->
             <section id="page-proxima" class="page-section space-y-6">
                 <div class="bg-white p-6 rounded-lg shadow">
-                    <h2 class="text-2xl font-bold mb-4">Próxima Pelada</h2>
+                    <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                        <h2 id="proxima-pelada-title" class="text-2xl font-bold">Próxima Pelada</h2>
+                        <span id="player-count" class="text-lg text-gray-600 font-medium">(0 confirmados)</span>
+                    </div>
+                    <!-- NOVO: Seletor de Semanas (Próximas Segundas) -->
+                    <div id="pelada-selector-container" class="flex flex-wrap gap-2 mb-4">
+                        <!-- Botões das datas serão inseridos aqui -->
+                    </div>
                     
                     <form id="form-add-proxima" class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
                         <input type="text" name="nome" placeholder="Nome do jogador" class="md:col-span-2 p-2 border rounded-lg" required>
@@ -522,7 +671,6 @@
                 
                 <div class="bg-white rounded-lg shadow overflow-hidden">
                     <div id="proxima-lista" class="p-4">
-                        <!-- Lista de jogadores será renderizada aqui -->
                         <p>Carregando lista...</p>
                     </div>
                 </div>
@@ -531,7 +679,10 @@
             <!-- ========= SEÇÃO 3: CAIXA DA PELADA ========= -->
             <section id="page-caixa" class="page-section space-y-6">
                 <div class="bg-white p-6 rounded-lg shadow">
-                    <h2 class="text-2xl font-bold mb-4">Caixa - Novembro</h2>
+                     <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                        <h2 id="caixa-title" class="text-2xl font-bold">Caixa</h2>
+                        <!-- O seletor de mês aqui é o mesmo dos mensalistas, controlado centralmente -->
+                    </div>
                     
                     <form id="form-add-caixa" class="flex flex-col gap-2 mb-4">
                         <input type="text" name="descricao" placeholder="Descrição (ex: Pagamento, Compra de bolas)" class="p-2 border rounded-lg" required>
@@ -547,24 +698,20 @@
                         <h3 id="caixa-saldo" class="text-xl font-semibold text-gray-800">Saldo Final: R$ 0,00</h3>
                     </div>
                     <div id="caixa-lista" class="p-4">
-                        <!-- Lista de transações será renderizada aqui -->
                         <p>Carregando transações...</p>
                     </div>
                 </div>
             </section>
 
-            <!-- *** REMOVIDO: Seção HTML do Ranking *** -->
-
         </main>
         
         <footer class="p-4 text-center text-sm text-gray-500 mt-8">
-            App de Gestão da Pelada v3.0
+            App de Gestão da Pelada v4.0
         </footer>
     </div>
     
     <!-- Script para carregar ícones -->
     <script>
-      // Esta chamada é necessária após o script da cabeça ser carregado
       lucide.createIcons();
     </script>
 
