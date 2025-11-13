@@ -61,7 +61,6 @@
             // (ex: 'mensalistas_novembro', 'caixa_novembro', etc)
             return collection(db, collectionName);
         }
-
         // --- Inicialização ---
         document.addEventListener('DOMContentLoaded', async () => {
             try {
@@ -69,13 +68,13 @@
                 setLogLevel('Debug');
                 
                 // Inicializa Firebase
-                // ** Certifique-se que o seu firebaseConfig acima está colado corretamente **
                 if (firebaseConfig.apiKey === "SEU_API_KEY") {
                     console.error("ERRO: Configure o firebaseConfig!");
                     document.getElementById('loading-global').innerHTML = '<p class="text-red-500">Erro: O app não foi configurado. Cole o `firebaseConfig` no index.html.</p>';
                     return;
                 }
                 
+                // *** REMOVIDO: const app duplicada ***
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
@@ -109,7 +108,7 @@
             initNavigation();
             
             // Inicia os listeners de dados em tempo real
-            listenRankingOriginal(); // O ranking antigo da planilha
+            // *** REMOVIDO: listenRankingOriginal(); ***
             listenMensalistas();
             listenProximaPelada();
             listenCaixa();
@@ -161,54 +160,7 @@
             console.log(`Navegando para: ${pageId}`);
         }
 
-        // --- 2. Ranking (Planilha Original) ---
-        async function listenRankingOriginal() {
-            const SHEET_ID = '1m6YSoFTUaNzoLMjLhBejb_GShLI_TBGXrLc97yeqYUw';
-            const GID = '1397719005';
-            const URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${GID}`;
-            
-            const loadingEl = document.getElementById('ranking-loading');
-            const containerEl = document.getElementById('ranking-data');
-            
-            try {
-                const response = await fetch(URL);
-                if (!response.ok) throw new Error('Falha na rede');
-                let text = await response.text();
-                const jsonText = text.substring(text.indexOf('(') + 1, text.lastIndexOf(')'));
-                const data = JSON.parse(jsonText);
-                
-                // Processa os dados e transforma em HTML
-                const headers = data.table.cols.map(col => col.label);
-                const rows = data.table.rows;
-
-                let html = '<table class="min-w-full divide-y divide-gray-200">';
-                html += '<thead class="bg-gray-50">';
-                html += '<tr>';
-                headers.forEach(header => {
-                    html += `<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">${header}</th>`;
-                });
-                html += '</tr></thead>';
-                html += '<tbody class="bg-white divide-y divide-gray-200">';
-                rows.forEach(row => {
-                    html += '<tr>';
-                    row.c.forEach((cell, index) => {
-                        const value = cell ? cell.v : '';
-                        let extraClasses = (index === 1) ? 'font-medium text-gray-800' : '';
-                        html += `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 ${extraClasses}">${value}</td>`;
-                    });
-                    html += '</tr>';
-                });
-                html += '</tbody></table>';
-                
-                containerEl.innerHTML = html;
-                
-            } catch (err) {
-                console.error('Erro ao buscar dados do ranking:', err);
-                containerEl.innerHTML = '<p class="text-red-500">Não foi possível carregar o ranking.</p>';
-            } finally {
-                loadingEl.style.display = 'none';
-            }
-        }
+        // *** REMOVIDO: Função listenRankingOriginal() ***
 
         // --- 3. Mensalistas ---
         function listenMensalistas() {
@@ -508,9 +460,7 @@
                     <button data-page="caixa" class="flex items-center gap-2 px-4 py-3 text-sm font-medium">
                         <i data-lucide="piggy-bank" class="w-4 h-4"></i> Caixa
                     </button>
-                    <button data-page="ranking" class="flex items-center gap-2 px-4 py-3 text-sm font-medium">
-                        <i data-lucide="bar-chart-3" class="w-4 h-4"></i> Ranking (Planilha)
-                    </button>
+                    <!-- *** REMOVIDO: Botão do Ranking *** -->
                 </div>
             </nav>
         </header>
@@ -603,26 +553,12 @@
                 </div>
             </section>
 
-            <!-- ========= SEÇÃO 4: RANKING (PLANILHA) ========= -->
-            <section id="page-ranking" class="page-section">
-                <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <header class="p-6">
-                        <h2 class="text-2xl font-bold">Ranking da Pelada (Planilha)</h2>
-                        <p class="text-gray-600">Dados lidos diretamente da planilha Google.</p>
-                    </header>
-                    <div id="ranking-loading" class="flex justify-center p-10">
-                        <div class="spinner"></div>
-                    </div>
-                    <div id="ranking-data" class="overflow-x-auto">
-                        <!-- Tabela do ranking original será injetada aqui -->
-                    </div>
-                </div>
-            </section>
+            <!-- *** REMOVIDO: Seção HTML do Ranking *** -->
 
         </main>
         
         <footer class="p-4 text-center text-sm text-gray-500 mt-8">
-            App de Gestão da Pelada v2.1
+            App de Gestão da Pelada v3.0
         </footer>
     </div>
     
