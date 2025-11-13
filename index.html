@@ -7,7 +7,6 @@
     <!-- Carrega o Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- **** CORREÇÃO 1: Script correto do Lucide (Ícones) **** -->
     <!-- Carrega o Lucide (versão Javascript puro) -->
     <script src="https://unpkg.com/lucide@0.395.0/dist/umd/lucide.min.js"></script>
     
@@ -41,9 +40,6 @@
             onSnapshot, collection, query, where, Timestamp, setLogLevel
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        /// Import the functions you need from the SDKs you need
-        import { initializeApp } from "firebase/app";
-        // TODO: Add SDKs for Firebase products that you want to use
         // https://firebase.google.com/docs/web/setup#available-libraries
 
         // Your web app's Firebase configuration
@@ -55,9 +51,6 @@
         messagingSenderId: "47202082426",
         appId: "1:47202082426:web:015e4dd73d444f085fa5c3"
         };
-
-        // Initialize Firebase
-        const app = initializeApp(firebaseConfig);
 
         let db, auth;
         let userId = 'default-user'; // Será atualizado pela autenticação
