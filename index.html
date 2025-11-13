@@ -11,7 +11,6 @@
     <script src="https://unpkg.com/lucide@0.395.0/dist/umd/lucide.min.js"></script>
     
     <style>
-        /* Estilos do Spinner (Carregador) */
         @keyframes spin { to { transform: rotate(360deg); } }
         .spinner {
             border: 4px solid rgba(0, 0, 0, 0.1);
@@ -21,14 +20,34 @@
             height: 40px;
             animation: spin 1s linear infinite;
         }
-        /* Esconde seções inativas */
         .page-section { display: none; }
-        /* Mostra a seção ativa */
         .page-section.active { display: block; }
-        /* Botão de data ativo */
         .pelada-date-btn.active {
             background-color: #2563eb; /* bg-blue-600 */
             color: white;
+        }
+        
+        /* NOVO: Controles de Gerente (escondidos por padrão) */
+        .admin-control {
+            display: none;
+        }
+        
+        /* NOVO: Modal de Login */
+        #login-modal-backdrop {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: none; /* Inicia escondido */
+            z-index: 40;
+        }
+        #login-modal {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            display: none; /* Inicia escondido */
+            z-index: 50;
         }
     </style>
 </head>
@@ -38,7 +57,11 @@
     <script type="module">
         // Importações do Firebase
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // NOVO: Importa funções de auth de email e logout
+        import { 
+            getAuth, signInAnonymously, onAuthStateChanged, setPersistence, 
+            inMemoryPersistence, signInWithEmailAndPassword, signOut 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, 
             onSnapshot, collection, query, where, Timestamp, setLogLevel
@@ -57,23 +80,24 @@
         let db, auth;
         let userId = 'default-user';
         
+        // --- NOVO: ESTADO DE GERENTE ---
+        let isManager = false;
+        let appInitialized = false; // Flag para evitar recarregar tudo
+        
         // --- ESTADO GLOBAL DE DATA ---
         const today = new Date();
         let selectedYear = today.getFullYear();
         let selectedMonth = today.getMonth() + 1; // 1 (Jan) - 12 (Dez)
         let selectedPeladaDate = ""; // ex: "2025-11-17"
         
-        // Funções para "desinscrever" dos listeners antigos
         let unsubMensalistas = null;
         let unsubProximaPelada = null;
         let unsubCaixa = null;
         
         const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
-        // Gera o sufixo da coleção, ex: "2025_11"
         const getMonthSuffix = () => `${selectedYear}_${String(selectedMonth).padStart(2, '0')}`;
         
-        // Coleções do Firestore
         const getCollection = (collectionName) => {
             return collection(db, collectionName);
         }
@@ -89,16 +113,41 @@
                 
                 await setPersistence(auth, inMemoryPersistence);
 
+                // --- LÓGICA DE AUTH ATUALIZADA ---
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
-                        console.log("Usuário autenticado:", user.uid);
-                        userId = user.uid;
-                        initializeAppListeners();
+                        // Verifica se o usuário é o Gerente ou Anônimo
+                        if (user.isAnonymous) {
+                            console.log("Usuário anônimo conectado:", user.uid);
+                            isManager = false;
+                        } else {
+                            console.log("GERENTE conectado:", user.email);
+                            isManager = true;
+                        }
+                        
+                        // O app é inicializado para AMBOS os tipos de usuário
+                        // A flag 'isManager' vai controlar o que é mostrado
+                        if (!appInitialized) {
+                            initializeAppListeners();
+                            appInitialized = true;
+                        } else {
+                            // Se o app já iniciou (ex: gerente logou),
+                            // apenas atualiza a UI e recarrega os dados
+                            // para mostrar os botões de admin
+                            updateUIVisibility();
+                            listenMensalistas();
+                            listenProximaPelada();
+                            listenCaixa();
+                        }
+                        
                     } else {
-                        console.log("Usuário não autenticado.");
+                        // Se o usuário deslogou (clicou em Sair), loga-o anonimamente
+                        console.log("Usuário deslogado, logando como anônimo.");
+                        signInAnonymously(auth); // Volta para o modo visualização
                     }
                 });
-
+                
+                // Tenta o login anônimo ao carregar a página
                 await signInAnonymously(auth);
 
             } catch (error) {
@@ -133,7 +182,40 @@
 
         // --- 1. Navegação (SPA) e Seletores de Data ---
         
+        // NOVO: Mostra/esconde controles de admin
+        function updateUIVisibility() {
+            const controls = document.querySelectorAll('.admin-control');
+            const loginBtn = document.getElementById('login-btn');
+            const logoutBtn = document.getElementById('logout-btn');
+            
+            if (isManager) {
+                // Mostra todos os controles de admin
+                controls.forEach(el => {
+                    // Tenta restaurar o display original (flex, grid) ou usa 'block'
+                    const originalDisplay = el.dataset.display || 'block';
+                    el.style.display = originalDisplay;
+                });
+                loginBtn.style.display = 'none';
+                logoutBtn.style.display = 'flex'; // 'flex' pois é um botão com ícone
+            } else {
+                // Esconde todos os controles de admin
+                controls.forEach(el => {
+                    // Guarda o display original antes de esconder
+                    if (!el.dataset.display) {
+                        const currentDisplay = window.getComputedStyle(el).display;
+                        if (currentDisplay !== 'none') {
+                            el.dataset.display = currentDisplay;
+                        }
+                    }
+                    el.style.display = 'none';
+                });
+                loginBtn.style.display = 'flex';
+                logoutBtn.style.display = 'none';
+            }
+        }
+        
         function renderMonthSelectors() {
+            // ... (código existente, sem alterações) ...
             const container = document.getElementById('month-selector-container');
             let yearHtml = '<select id="year-select" class="p-2 border rounded-lg bg-white">';
             for (let y = today.getFullYear() - 1; y <= today.getFullYear() + 1; y++) {
@@ -150,19 +232,14 @@
             
             container.innerHTML = monthHtml + yearHtml;
             
-            // Adiciona listeners para trocar o mês/ano
             document.getElementById('month-select').addEventListener('change', (e) => {
                 selectedMonth = parseInt(e.target.value);
-                console.log(`Mês alterado para: ${getMonthSuffix()}`);
-                // Recarrega os dados do mês
                 listenMensalistas();
                 listenCaixa();
                 updateSectionTitles();
             });
             document.getElementById('year-select').addEventListener('change', (e) => {
                 selectedYear = parseInt(e.target.value);
-                console.log(`Ano alterado para: ${getMonthSuffix()}`);
-                // Recarrega os dados do mês
                 listenMensalistas();
                 listenCaixa();
                 updateSectionTitles();
@@ -177,29 +254,27 @@
             document.getElementById('caixa-title').innerText = `Caixa - ${mesNome} ${selectedYear}`;
         }
         
-        // Gera as próximas 4 segundas-feiras
         function getNextMondays() {
+            // ... (código existente, sem alterações) ...
             let mondays = [];
             let date = new Date();
-            // Encontra a próxima segunda (ou hoje se for segunda)
             let day = date.getDay();
-            let add = (day === 1) ? 0 : (8 - day) % 7; // Dias até a próxima segunda
+            let add = (day === 1) ? 0 : (8 - day) % 7; 
             date.setDate(date.getDate() + add);
 
             for (let i = 0; i < 4; i++) {
-                let dateString = date.toISOString().split('T')[0]; // "YYYY-MM-DD"
-                let label = date.toLocaleDateString('pt-BR', { month: 'short', day: 'numeric' }); // "17 nov"
+                let dateString = date.toISOString().split('T')[0];
+                let label = date.toLocaleDateString('pt-BR', { month: 'short', day: 'numeric' }); 
                 mondays.push({ dateString, label });
-                date.setDate(date.getDate() + 7); // Próxima semana
+                date.setDate(date.getDate() + 7);
             }
             return mondays;
         }
 
         function renderPeladaSelectors() {
+            // ... (código existente, sem alterações) ...
             const container = document.getElementById('pelada-selector-container');
             const mondays = getNextMondays();
-            
-            // Define a data da pelada padrão como a próxima segunda
             selectedPeladaDate = mondays[0].dateString;
             
             let html = '';
@@ -210,16 +285,11 @@
             });
             container.innerHTML = html;
             
-            // Adiciona listeners aos botões
             document.querySelectorAll('.pelada-date-btn').forEach(button => {
                 button.addEventListener('click', () => {
-                    // Atualiza UI
                     document.querySelectorAll('.pelada-date-btn').forEach(btn => btn.classList.remove('active'));
                     button.classList.add('active');
-                    
-                    // Atualiza estado e recarrega dados
                     selectedPeladaDate = button.dataset.date;
-                    console.log(`Data da pelada alterada para: ${selectedPeladaDate}`);
                     listenProximaPelada();
                     document.getElementById('proxima-pelada-title').innerText = `Próxima Pelada - ${button.innerText}`;
                 });
@@ -235,10 +305,17 @@
                     showPage(pageId);
                 });
             });
+            
+            // NOVO: Listeners do Modal de Login
+            document.getElementById('login-btn').addEventListener('click', toggleLoginModal);
+            document.getElementById('logout-btn').addEventListener('click', handleLogout);
+            document.getElementById('login-modal-backdrop').addEventListener('click', toggleLoginModal);
+            document.getElementById('login-modal-close').addEventListener('click', toggleLoginModal);
+            document.getElementById('login-form').addEventListener('submit', handleLogin);
         }
 
         function showPage(pageId) {
-            // ... (código de navegação existente, sem alterações) ...
+            // ... (código existente, sem alterações) ...
             document.querySelectorAll('.page-section').forEach(section => {
                 section.classList.remove('active');
             });
@@ -255,17 +332,12 @@
                 }
             });
         }
-
+        
         // --- 3. Mensalistas (com lógica de pagamento) ---
         function listenMensalistas() {
-            // Desinscreve do listener antigo
-            if (unsubMensalistas) {
-                unsubMensalistas();
-                console.log("Listener de mensalistas anterior removido.");
-            }
+            if (unsubMensalistas) unsubMensalistas();
             
             const collectionName = `mensalistas_${getMonthSuffix()}`;
-            console.log(`Ouvindo coleção: ${collectionName}`);
             const collectionRef = getCollection(collectionName);
             
             unsubMensalistas = onSnapshot(collectionRef, (snapshot) => {
@@ -276,7 +348,6 @@
                 renderMensalistas(mensalistas);
             }, (error) => {
                 console.error("Erro ao buscar mensalistas: ", error);
-                document.getElementById('mensalistas-container').innerHTML = '<p class="text-red-500">Erro ao carregar mensalistas.</p>';
             });
         }
 
@@ -292,6 +363,16 @@
                 const isPago = player.status === 'Pago';
                 const statusClass = isPago ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
                 
+                // NOVO: Botão de status só é renderizado para gerentes
+                let adminButtonHtml = '';
+                if (isManager) {
+                    adminButtonHtml = `
+                    <button data-id="${player.id}" class="toggle-status-btn p-2 rounded-full hover:bg-gray-100">
+                        <i data-lucide="${isPago ? 'rotate-ccw' : 'check'}"></i>
+                    </button>
+                    `;
+                }
+                
                 html += `
                     <li class="p-4 flex justify-between items-center">
                         <span class="font-medium">${player.nome}</span>
@@ -299,9 +380,7 @@
                             <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">
                                 ${player.status}
                             </span>
-                            <button data-id="${player.id}" class="toggle-status-btn p-2 rounded-full hover:bg-gray-100">
-                                <i data-lucide="${isPago ? 'rotate-ccw' : 'check'}"></i>
-                            </button>
+                            ${adminButtonHtml}
                         </div>
                     </li>
                 `;
@@ -310,39 +389,35 @@
             container.innerHTML = html;
             
             lucide.createIcons();
-            document.querySelectorAll('.toggle-status-btn').forEach(button => {
-                button.addEventListener('click', toggleMensalistaStatus);
-            });
+            
+            // Só adiciona listeners se os botões existirem (se for gerente)
+            if (isManager) {
+                document.querySelectorAll('.toggle-status-btn').forEach(button => {
+                    button.addEventListener('click', toggleMensalistaStatus);
+                });
+            }
         }
         
         async function toggleMensalistaStatus(event) {
+            // ... (código existente, sem alterações) ...
             const button = event.currentTarget;
             const docId = button.dataset.id;
-            
             const currentMonthSuffix = getMonthSuffix();
             const docRef = doc(db, `mensalistas_${currentMonthSuffix}`, docId);
             
             try {
-                // 1. Pega o documento para saber o status ATUAL
                 const docSnap = await getDoc(docRef);
-                if (!docSnap.exists()) {
-                    console.error("Mensalista não encontrado!");
-                    return;
-                }
+                if (!docSnap.exists()) return;
                 
                 const mensalista = docSnap.data();
                 const currentStatus = mensalista.status;
                 const newStatus = (currentStatus === 'Pago') ? 'Não' : 'Pago';
 
-                // 2. Atualiza o status do mensalista
                 await updateDoc(docRef, { status: newStatus });
                 console.log(`Status do ${docId} atualizado para ${newStatus}`);
 
-                // 3. **** NOVA LÓGICA ****
-                // Se o status mudou de "Não" para "Pago", adiciona R$ 49,00 ao caixa
                 if (currentStatus === 'Não' && newStatus === 'Pago') {
-                    console.log(`Detectado 1º pagamento para ${mensalista.nome}. Adicionando R$ 49,00 ao caixa.`);
-                    
+                    console.log(`Adicionando R$ 49,00 ao caixa.`);
                     const caixaCollectionRef = getCollection(`caixa_${currentMonthSuffix}`);
                     await addDoc(caixaCollectionRef, {
                         descricao: `Pagamento Mensal - ${mensalista.nome}`,
@@ -352,11 +427,12 @@
                 }
                 
             } catch (error) {
-                console.error("Erro ao atualizar status ou adicionar ao caixa: ", error);
+                console.error("Erro ao atualizar status: ", error);
             }
         }
         
         async function handleAddMensalista(event) {
+            // ... (código existente, sem alterações) ...
             event.preventDefault();
             const form = event.target;
             const nome = form.nome.value.trim();
@@ -366,9 +442,8 @@
             try {
                 await addDoc(collectionRef, {
                     nome: nome,
-                    status: "Não" // Padrão
+                    status: "Não"
                 });
-                console.log(`Mensalista ${nome} adicionado.`);
                 form.reset();
             } catch (error) {
                 console.error("Erro ao adicionar mensalista: ", error);
@@ -377,12 +452,9 @@
 
         // --- 4. Próxima Pelada (por data) ---
         function listenProximaPelada() {
-            if (unsubProximaPelada) {
-                unsubProximaPelada();
-            }
+            if (unsubProximaPelada) unsubProximaPelada();
             
             const collectionName = `pelada_${selectedPeladaDate}`;
-            console.log(`Ouvindo coleção: ${collectionName}`);
             const collectionRef = getCollection(collectionName);
             
             unsubProximaPelada = onSnapshot(collectionRef, (snapshot) => {
@@ -393,7 +465,6 @@
                 renderProximaPelada(jogadores);
             }, (error) => {
                 console.error("Erro ao buscar próxima pelada: ", error);
-                document.getElementById('proxima-lista').innerHTML = '<p class="text-red-500">Erro ao carregar lista.</p>';
             });
         }
         
@@ -407,9 +478,18 @@
             }
             
             let html = '<ul class="divide-y divide-gray-200">';
-            // ... (renderização da lista, sem alterações) ...
             jogadores.forEach(player => {
                 const tipoClass = player.tipo === 'Mensalista' ? 'text-blue-600' : 'text-orange-600';
+                
+                // NOVO: Botão de remover só é renderizado para gerentes
+                let adminButtonHtml = '';
+                if (isManager) {
+                    adminButtonHtml = `
+                    <button data-id="${player.id}" class="remove-player-btn p-2 rounded-full text-red-500 hover:bg-red-100">
+                        <i data-lucide="x"></i>
+                    </button>
+                    `;
+                }
                 
                 html += `
                     <li class="p-4 flex justify-between items-center">
@@ -419,9 +499,7 @@
                         </div>
                         <div class="flex items-center gap-2">
                             <span class="font-semibold text-gray-700">R$ ${player.valor.toFixed(2).replace('.', ',')}</span>
-                            <button data-id="${player.id}" class="remove-player-btn p-2 rounded-full text-red-500 hover:bg-red-100">
-                                <i data-lucide="x"></i>
-                            </button>
+                            ${adminButtonHtml}
                         </div>
                     </li>
                 `;
@@ -430,12 +508,16 @@
             container.innerHTML = html;
             
             lucide.createIcons();
-            document.querySelectorAll('.remove-player-btn').forEach(button => {
-                button.addEventListener('click', removePlayerProxima);
-            });
+            
+            if (isManager) {
+                document.querySelectorAll('.remove-player-btn').forEach(button => {
+                    button.addEventListener('click', removePlayerProxima);
+                });
+            }
         }
         
         async function handleAddProxima(event) {
+            // ... (código existente, sem alterações) ...
             event.preventDefault();
             const form = event.target;
             const nome = form.nome.value.trim();
@@ -443,15 +525,10 @@
             if (!nome) return;
             
             const valor = (tipo === 'Mensalista') ? 12.25 : 16.00;
-            
             const collectionRef = getCollection(`pelada_${selectedPeladaDate}`);
+            
             try {
-                await addDoc(collectionRef, {
-                    nome: nome,
-                    tipo: tipo,
-                    valor: valor
-                });
-                console.log(`Jogador ${nome} adicionado à pelada ${selectedPeladaDate}.`);
+                await addDoc(collectionRef, { nome: nome, tipo: tipo, valor: valor });
                 form.reset();
             } catch (error) {
                 console.error("Erro ao adicionar jogador: ", error);
@@ -459,13 +536,12 @@
         }
         
         async function removePlayerProxima(event) {
+            // ... (código existente, sem alterações) ...
             const button = event.currentTarget;
             const docId = button.dataset.id;
-            
             const docRef = doc(db, `pelada_${selectedPeladaDate}`, docId);
             try {
                 await deleteDoc(docRef);
-                console.log(`Jogador ${docId} removido.`);
             } catch (error) {
                 console.error("Erro ao remover jogador: ", error);
             }
@@ -473,12 +549,9 @@
 
         // --- 5. Caixa da Pelada (por mês) ---
         function listenCaixa() {
-            if (unsubCaixa) {
-                unsubCaixa();
-            }
+            if (unsubCaixa) unsubCaixa();
             
             const collectionName = `caixa_${getMonthSuffix()}`;
-            console.log(`Ouvindo coleção: ${collectionName}`);
             const collectionRef = getCollection(collectionName);
             
             unsubCaixa = onSnapshot(collectionRef, (snapshot) => {
@@ -490,7 +563,6 @@
                 renderCaixa(transacoes);
             }, (error) => {
                 console.error("Erro ao buscar caixa: ", error);
-                document.getElementById('caixa-lista').innerHTML = '<p class="text-red-500">Erro ao carregar transações.</p>';
             });
         }
         
@@ -504,8 +576,8 @@
             if (transacoes.length === 0) {
                 html = `<p class="text-gray-500">Nenhuma transação registrada para ${meses[selectedMonth-1]}.</p>`;
             } else {
-                // ... (renderização da lista, sem alterações) ...
                 transacoes.forEach(t => {
+                    // ... (código existente, sem alterações) ...
                     const isEntrada = t.valor > 0;
                     const valorClass = isEntrada ? 'text-green-600' : 'text-red-600';
                     const icon = isEntrada ? 'plus' : 'minus';
@@ -535,15 +607,13 @@
         }
         
         async function handleAddCaixa(event) {
+            // ... (código existente, sem alterações) ...
             event.preventDefault();
             const form = event.target;
             const descricao = form.descricao.value.trim();
             const valor = parseFloat(form.valor.value);
             
-            if (!descricao || isNaN(valor) || valor === 0) {
-                console.warn("Tentativa de submissão de formulário de caixa inválido.");
-                return;
-            }
+            if (!descricao || isNaN(valor) || valor === 0) return;
             
             const collectionRef = getCollection(`caixa_${getMonthSuffix()}`);
             try {
@@ -552,18 +622,64 @@
                     valor: valor,
                     data: Timestamp.now()
                 });
-                console.log(`Transação ${descricao} adicionada.`);
                 form.reset();
             } catch (error) {
                 console.error("Erro ao adicionar transação: ", error);
             }
         }
         
-        // --- Configuração dos Formulários ---
+        // --- Configuração dos Formulários e Modal ---
         function setupForms() {
             document.getElementById('form-add-mensalista').addEventListener('submit', handleAddMensalista);
             document.getElementById('form-add-proxima').addEventListener('submit', handleAddProxima);
             document.getElementById('form-add-caixa').addEventListener('submit', handleAddCaixa);
+            
+            // NOVO: Chama a função para esconder/mostrar os formulários
+            updateUIVisibility();
+        }
+        
+        // --- NOVO: Funções de Login/Logout ---
+        
+        function toggleLoginModal() {
+            const backdrop = document.getElementById('login-modal-backdrop');
+            const modal = document.getElementById('login-modal');
+            const errorMsg = document.getElementById('login-error');
+            
+            const isHidden = backdrop.style.display === 'none' || backdrop.style.display === '';
+            backdrop.style.display = isHidden ? 'block' : 'none';
+            modal.style.display = isHidden ? 'block' : 'none';
+            errorMsg.style.display = 'none'; // Sempre esconde o erro ao abrir/fechar
+        }
+        
+        async function handleLogin(event) {
+            event.preventDefault();
+            const email = event.target.email.value;
+            const password = event.target.password.value;
+            const errorMsg = document.getElementById('login-error');
+            
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                // Sucesso!
+                toggleLoginModal(); // Fecha o modal
+                event.target.reset(); // Limpa o formulário
+                // O 'onAuthStateChanged' vai cuidar do resto (mudar isManager, recarregar UI)
+                
+            } catch (error) {
+                console.error("Erro de login:", error.code);
+                errorMsg.innerText = "Email ou senha incorretos.";
+                errorMsg.style.display = 'block';
+            }
+        }
+        
+        async function handleLogout() {
+            try {
+                await signOut(auth);
+                // O 'onAuthStateChanged' vai detectar o logout e
+                // automaticamente logar o usuário como anônimo.
+                console.log("Gerente deslogado.");
+            } catch (error) {
+                console.error("Erro ao sair:", error);
+            }
         }
 
     </script>
@@ -575,6 +691,31 @@
             <p class="mt-4 text-gray-600">Conectando ao app da pelada...</p>
         </div>
     </div>
+    
+    <!-- NOVO: Modal de Login (Escondido) -->
+    <div id="login-modal-backdrop"></div>
+    <div id="login-modal" class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-xl font-bold">Login de Gerente</h3>
+            <button id="login-modal-close" class="p-1 rounded-full hover:bg-gray-200">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+        <form id="login-form">
+            <div class="mb-4">
+                <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                <input type="email" id="email" name="email" class="mt-1 p-2 w-full border rounded-lg" required>
+            </div>
+            <div class="mb-4">
+                <label for="password" class="block text-sm font-medium text-gray-700">Senha</label>
+                <input type="password" id="password" name="password" class="mt-1 p-2 w-full border rounded-lg" required>
+            </div>
+            <p id="login-error" class="text-red-500 text-sm mb-4" style="display: none;"></p>
+            <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
+                Entrar
+            </button>
+        </form>
+    </div>
 
     <!-- Container Principal do App (inicia escondido) -->
     <div id="app-container" style="display: none;">
@@ -582,6 +723,15 @@
         <header class="bg-gray-800 text-white shadow-md">
             <div class="max-w-4xl mx-auto p-4 flex justify-between items-center">
                 <h1 class="text-xl md:text-2xl font-bold">Gestão da Pelada ⚽</h1>
+                <!-- NOVO: Botões de Login/Logout -->
+                <div>
+                    <button id="login-btn" class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg hover:bg-gray-700">
+                        <i data-lucide="log-in" class="w-4 h-4"></i> restrict area
+                    </button>
+                    <button id="logout-btn" class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg hover:bg-red-600" style="display: none;">
+                        <i data-lucide="log-out" class="w-4 h-4"></i> Sair
+                    </button>
+                </div>
             </div>
             <!-- Menu de Navegação -->
             <nav class="bg-gray-700">
@@ -614,7 +764,7 @@
                       ⏰ <strong>Horário:</strong> Segunda-feira 20:00–21:00
                     </p>
                     <p class="mt-4 text-sm text-gray-500">
-                        Todos os dados são salvos em tempo real e compartilhados com quem tiver acesso a esta página.
+                        Todos os dados são salvos em tempo real. Faça login como gerente para editar.
                     </p>
                 </div>
             </section>
@@ -624,13 +774,12 @@
                 <div class="bg-white p-6 rounded-lg shadow">
                     <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                         <h2 id="mensalistas-title" class="text-2xl font-bold">Mensalistas</h2>
-                        <!-- NOVO: Seletor de Mês/Ano -->
                         <div id="month-selector-container" class="flex gap-2">
-                            <!-- Dropdowns de Mês/Ano serão inseridos aqui -->
                         </div>
                     </div>
                     
-                    <form id="form-add-mensalista" class="flex gap-2 mb-4">
+                    <!-- NOVO: Adicionada classe admin-control -->
+                    <form id="form-add-mensalista" class="admin-control flex gap-2 mb-4">
                         <input type="text" name="nome" placeholder="Nome do mensalista" class="flex-grow p-2 border rounded-lg" required>
                         <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2">
                             <i data-lucide="plus" class="w-4 h-4"></i> Adicionar
@@ -652,12 +801,11 @@
                         <h2 id="proxima-pelada-title" class="text-2xl font-bold">Próxima Pelada</h2>
                         <span id="player-count" class="text-lg text-gray-600 font-medium">(0 confirmados)</span>
                     </div>
-                    <!-- NOVO: Seletor de Semanas (Próximas Segundas) -->
                     <div id="pelada-selector-container" class="flex flex-wrap gap-2 mb-4">
-                        <!-- Botões das datas serão inseridos aqui -->
                     </div>
                     
-                    <form id="form-add-proxima" class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
+                    <!-- NOVO: Adicionada classe admin-control -->
+                    <form id="form-add-proxima" class="admin-control grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
                         <input type="text" name="nome" placeholder="Nome do jogador" class="md:col-span-2 p-2 border rounded-lg" required>
                         <select name="tipo" class="p-2 border rounded-lg bg-white">
                             <option value="Mensalista">Mensalista (R$ 12,25)</option>
@@ -681,10 +829,10 @@
                 <div class="bg-white p-6 rounded-lg shadow">
                      <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                         <h2 id="caixa-title" class="text-2xl font-bold">Caixa</h2>
-                        <!-- O seletor de mês aqui é o mesmo dos mensalistas, controlado centralmente -->
                     </div>
                     
-                    <form id="form-add-caixa" class="flex flex-col gap-2 mb-4">
+                    <!-- NOVO: Adicionada classe admin-control -->
+                    <form id="form-add-caixa" class="admin-control flex flex-col gap-2 mb-4">
                         <input type="text" name="descricao" placeholder="Descrição (ex: Pagamento, Compra de bolas)" class="p-2 border rounded-lg" required>
                         <input type="number" name="valor" step="0.01" placeholder="Valor (use negativo para saídas, ex: -50.00)" class="p-2 border rounded-lg" required>
                         <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2">
@@ -706,7 +854,7 @@
         </main>
         
         <footer class="p-4 text-center text-sm text-gray-500 mt-8">
-            App de Gestão da Pelada v4.0
+            App de Gestão da Pelada v5.0 (Final)
         </footer>
     </div>
     
