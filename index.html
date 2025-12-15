@@ -48,7 +48,6 @@
             getAuth, signInAnonymously, onAuthStateChanged, setPersistence, 
             inMemoryPersistence, signInWithEmailAndPassword, signOut 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // NOVO: Importei 'getDocs' para poder recalcular o saldo lendo todas as coleções
         import { 
             getFirestore, doc, getDoc, getDocs, addDoc, setDoc, updateDoc, deleteDoc, 
             onSnapshot, collection, query, where, Timestamp, setLogLevel, increment
@@ -69,13 +68,17 @@
         let isManager = false;
         let appInitialized = false;
         
+        // Dados Globais
+        let globalMensalistas = []; // Lista de mensalistas carregada para uso nas stats
+        let globalStats = []; // Lista de stats carregada
+        
         const today = new Date();
         let selectedYear = today.getFullYear();
         let selectedMonth = today.getMonth() + 1;
         let selectedPeladaDate = "";
         
         let unsubMensalistas = null;
-        let unsubProximaPelada = null;
+        let unsubStats = null; // Listener de estatísticas
         let unsubCaixa = null;
         let unsubSaldoGlobal = null; 
         
@@ -109,7 +112,7 @@
                         } else {
                             updateUIVisibility();
                             listenMensalistas();
-                            listenProximaPelada();
+                            listenStats(); // Mudado de listenProximaPelada
                             listenCaixa();
                             listenSaldoGlobal(); 
                         }
@@ -130,7 +133,7 @@
             renderPeladaSelectors();
             
             listenMensalistas();
-            listenProximaPelada();
+            listenStats(); // Mudado de listenProximaPelada
             listenCaixa();
             listenSaldoGlobal(); 
 
@@ -183,6 +186,7 @@
             
             const updateData = () => {
                 listenMensalistas();
+                listenStats(); // Atualiza stats ao mudar o mês
                 listenCaixa();
                 updateSectionTitles();
             };
@@ -201,6 +205,7 @@
             const mesNome = meses[selectedMonth - 1];
             document.getElementById('mensalistas-title').innerText = `Mensalistas - ${mesNome} ${selectedYear}`;
             document.getElementById('caixa-title').innerText = `Caixa - ${mesNome} ${selectedYear}`;
+            // Stats title update is handled in renderStats
         }
         
         function getNextMondays() {
@@ -236,11 +241,11 @@
                     document.querySelectorAll('.pelada-date-btn').forEach(btn => btn.classList.remove('active'));
                     button.classList.add('active');
                     selectedPeladaDate = button.dataset.date;
-                    listenProximaPelada();
-                    document.getElementById('proxima-pelada-title').innerText = `Próxima Pelada - ${button.innerText}`;
+                    renderStatsUI(); // Re-renderiza a UI com a nova data (não precisa buscar no banco de novo se já temos o mês)
+                    document.getElementById('stats-date-title').innerText = `Súmula do Dia - ${button.innerText}`;
                 });
             });
-            document.getElementById('proxima-pelada-title').innerText = `Próxima Pelada - ${mondays[0].label}`;
+            document.getElementById('stats-date-title').innerText = `Súmula do Dia - ${mondays[0].label}`;
         }
         
         function initNavigation() {
@@ -255,8 +260,6 @@
             document.getElementById('login-modal-backdrop').addEventListener('click', toggleLoginModal);
             document.getElementById('login-modal-close').addEventListener('click', toggleLoginModal);
             document.getElementById('login-form').addEventListener('submit', handleLogin);
-            
-            // NOVO: Listener para recalcular o total
             document.getElementById('btn-sync-total').addEventListener('click', recalculateGlobalTotal);
         }
 
@@ -283,7 +286,11 @@
             unsubMensalistas = onSnapshot(collectionRef, (snapshot) => {
                 const mensalistas = [];
                 snapshot.forEach(doc => mensalistas.push({ id: doc.id, ...doc.data() }));
+                
+                // Atualiza global e re-renderiza as listas que dependem disso
+                globalMensalistas = mensalistas;
                 renderMensalistas(mensalistas);
+                renderStatsUI(); // Atualiza a súmula pois a lista de jogadores pode ter mudado
             });
         }
 
@@ -336,20 +343,15 @@
 
                 await updateDoc(docRef, { status: newStatus });
 
-                // Lógica de Pagamento Automático
                 if (currentStatus === 'Não' && newStatus === 'Pago') {
-                    // 1. Adiciona ao caixa do mês
                     const caixaCollectionRef = getCollection(`caixa_${currentMonthSuffix}`);
                     await addDoc(caixaCollectionRef, {
                         descricao: `Pagamento Mensal - ${mensalista.nome}`,
                         valor: 49.00,
                         data: Timestamp.now()
                     });
-                    
-                    // 2. NOVO: Incrementa o Saldo Global
                     await updateSaldoGlobal(49.00);
                 } else if (currentStatus === 'Pago' && newStatus === 'Não') {
-                     // Opcional: Se desfizer o pagamento, remove do Saldo Global?
                      await updateSaldoGlobal(-49.00);
                 }
             } catch (error) {
@@ -369,69 +371,182 @@
             } catch (error) { console.error(error); }
         }
 
-        // --- Próxima Pelada ---
-        function listenProximaPelada() {
-            if (unsubProximaPelada) unsubProximaPelada();
-            const collectionRef = getCollection(`pelada_${selectedPeladaDate}`);
-            unsubProximaPelada = onSnapshot(collectionRef, (snapshot) => {
-                const jogadores = [];
-                snapshot.forEach(doc => jogadores.push({ id: doc.id, ...doc.data() }));
-                renderProximaPelada(jogadores);
+        // --- ESTATÍSTICAS E RANKING (NOVA LÓGICA) ---
+        
+        function listenStats() {
+            if (unsubStats) unsubStats();
+            // Coleção separada para stats: stats_2025_11
+            const collectionRef = getCollection(`stats_${getMonthSuffix()}`);
+            
+            unsubStats = onSnapshot(collectionRef, (snapshot) => {
+                const stats = [];
+                snapshot.forEach(doc => {
+                    // doc.id será algo como "2025-11-17_PLAYERID"
+                    stats.push({ id: doc.id, ...doc.data() });
+                });
+                globalStats = stats;
+                renderStatsUI(); // Renderiza Ranking e Súmula
             });
         }
         
-        function renderProximaPelada(jogadores) {
-            const container = document.getElementById('proxima-lista');
-            document.getElementById('player-count').innerText = `(${jogadores.length} confirmados)`;
-            if (jogadores.length === 0) {
-                container.innerHTML = `<p class="text-gray-500">Ninguém confirmado para ${selectedPeladaDate}.</p>`;
+        function renderStatsUI() {
+            renderRanking();
+            renderSumula();
+        }
+        
+        function renderRanking() {
+            const container = document.getElementById('ranking-container');
+            const mesNome = meses[selectedMonth - 1];
+            document.getElementById('ranking-title').innerText = `Ranking Geral - ${mesNome}`;
+            
+            // Agrupar stats por player
+            const ranking = {};
+            
+            globalStats.forEach(stat => {
+                if (!ranking[stat.playerId]) {
+                    ranking[stat.playerId] = { nome: stat.nome, gols: 0, assistencias: 0 };
+                }
+                ranking[stat.playerId].gols += (stat.gols || 0);
+                ranking[stat.playerId].assistencias += (stat.assistencias || 0);
+            });
+            
+            // Converter para array e ordenar (Gols desc, depois Assistências desc)
+            const sortedRanking = Object.values(ranking).sort((a, b) => {
+                if (b.gols !== a.gols) return b.gols - a.gols;
+                return b.assistencias - a.assistencias;
+            });
+            
+            if (sortedRanking.length === 0) {
+                container.innerHTML = `<p class="text-gray-500 p-4">Nenhuma estatística registrada este mês.</p>`;
+            } else {
+                let html = '<table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Jogador</th><th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Gols</th><th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Assis.</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">';
+                
+                sortedRanking.forEach((r, index) => {
+                    let medal = "";
+                    if (index === 0) medal = "🥇";
+                    else if (index === 1) medal = "🥈";
+                    else if (index === 2) medal = "🥉";
+                    
+                    html += `
+                        <tr>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">${medal} ${r.nome}</td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-center text-green-600 font-bold">${r.gols}</td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-center text-blue-600 font-bold">${r.assistencias}</td>
+                        </tr>
+                    `;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            }
+        }
+        
+        function renderSumula() {
+            const container = document.getElementById('sumula-lista');
+            
+            if (globalMensalistas.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 p-4">Adicione mensalistas primeiro.</p>';
                 return;
             }
+            
             let html = '<ul class="divide-y divide-gray-200">';
-            jogadores.forEach(player => {
-                const tipoClass = player.tipo === 'Mensalista' ? 'text-blue-600' : 'text-orange-600';
-                let adminButtonHtml = isManager ? `
-                    <button data-id="${player.id}" class="remove-player-btn p-2 rounded-full text-red-500 hover:bg-red-100">
-                        <i data-lucide="x"></i>
-                    </button>` : '';
+            
+            globalMensalistas.forEach(player => {
+                // Encontrar stats deste player para a data selecionada
+                const statId = `${selectedPeladaDate}_${player.id}`;
+                const stat = globalStats.find(s => s.id === statId) || { gols: 0, assistencias: 0 };
+                
+                // Controles de Admin (visíveis só para gerentes)
+                // Se não for gerente, mostra apenas os números fixos
+                let controlsHtml = '';
+                
+                if (isManager) {
+                    controlsHtml = `
+                        <div class="flex items-center gap-4">
+                            <div class="flex items-col items-center gap-1">
+                                <span class="text-[10px] text-green-600 uppercase font-bold">Gols</span>
+                                <div class="flex items-center bg-gray-100 rounded-lg">
+                                    <button class="stat-btn p-1 px-2 hover:bg-gray-200 text-gray-600" data-pid="${player.id}" data-pname="${player.nome}" data-type="gols" data-delta="-1">-</button>
+                                    <span class="w-6 text-center font-bold text-green-700">${stat.gols || 0}</span>
+                                    <button class="stat-btn p-1 px-2 hover:bg-gray-200 text-gray-600" data-pid="${player.id}" data-pname="${player.nome}" data-type="gols" data-delta="1">+</button>
+                                </div>
+                            </div>
+                            <div class="flex items-col items-center gap-1">
+                                <span class="text-[10px] text-blue-600 uppercase font-bold">Assis.</span>
+                                <div class="flex items-center bg-gray-100 rounded-lg">
+                                    <button class="stat-btn p-1 px-2 hover:bg-gray-200 text-gray-600" data-pid="${player.id}" data-pname="${player.nome}" data-type="assistencias" data-delta="-1">-</button>
+                                    <span class="w-6 text-center font-bold text-blue-700">${stat.assistencias || 0}</span>
+                                    <button class="stat-btn p-1 px-2 hover:bg-gray-200 text-gray-600" data-pid="${player.id}" data-pname="${player.nome}" data-type="assistencias" data-delta="1">+</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // Modo visualização
+                     controlsHtml = `
+                        <div class="flex items-center gap-4 text-sm">
+                            <div class="flex flex-col items-center">
+                                <span class="text-[10px] text-green-600 uppercase font-bold">Gols</span>
+                                <span class="font-bold text-green-700 text-lg">${stat.gols || 0}</span>
+                            </div>
+                            <div class="flex flex-col items-center">
+                                <span class="text-[10px] text-blue-600 uppercase font-bold">Assis.</span>
+                                <span class="font-bold text-blue-700 text-lg">${stat.assistencias || 0}</span>
+                            </div>
+                        </div>
+                    `;
+                }
+
                 html += `
-                    <li class="p-4 flex justify-between items-center">
-                        <div><span class="font-medium">${player.nome}</span><span class="ml-2 text-sm ${tipoClass}">(${player.tipo})</span></div>
-                        <div class="flex items-center gap-2"><span class="font-semibold text-gray-700">R$ ${player.valor.toFixed(2).replace('.', ',')}</span>${adminButtonHtml}</div>
+                    <li class="p-4 flex flex-col sm:flex-row justify-between items-center gap-2">
+                        <span class="font-medium text-gray-800">${player.nome}</span>
+                        ${controlsHtml}
                     </li>
                 `;
             });
             html += '</ul>';
             container.innerHTML = html;
-            lucide.createIcons();
-            if (isManager) document.querySelectorAll('.remove-player-btn').forEach(btn => btn.addEventListener('click', removePlayerProxima));
+            
+            if (isManager) {
+                document.querySelectorAll('.stat-btn').forEach(btn => {
+                    btn.addEventListener('click', handleStatChange);
+                });
+            }
         }
         
-        async function handleAddProxima(event) {
-            event.preventDefault();
-            const form = event.target;
-            const nome = form.nome.value.trim();
-            const tipo = form.tipo.value;
-            if (!nome) return;
-            const valor = (tipo === 'Mensalista') ? 12.25 : 16.00;
-            const collectionRef = getCollection(`pelada_${selectedPeladaDate}`);
-            try { await addDoc(collectionRef, { nome: nome, tipo: tipo, valor: valor }); form.reset(); } catch (error) { console.error(error); }
-        }
-        
-        async function removePlayerProxima(event) {
-            const button = event.currentTarget;
-            const docId = button.dataset.id;
-            const docRef = doc(db, `pelada_${selectedPeladaDate}`, docId);
-            try { await deleteDoc(docRef); } catch (error) { console.error(error); }
+        async function handleStatChange(event) {
+            const btn = event.currentTarget;
+            const pid = btn.dataset.pid;
+            const pname = btn.dataset.pname;
+            const type = btn.dataset.type; // 'gols' ou 'assistencias'
+            const delta = parseInt(btn.dataset.delta);
+            
+            const statId = `${selectedPeladaDate}_${pid}`;
+            const docRef = doc(db, `stats_${getMonthSuffix()}`, statId);
+            
+            try {
+                // Usa setDoc com merge para criar se não existir ou atualizar se existir
+                // Increment funciona bem para concorrência
+                await setDoc(docRef, {
+                    playerId: pid,
+                    nome: pname,
+                    data: selectedPeladaDate,
+                    [type]: increment(delta)
+                }, { merge: true });
+                
+                // Nota: Firestore não impede valores negativos com increment.
+                // Na UI pode aparecer -1 se clicar demais. Se quiser impedir, teria que ler antes.
+                // Para manter a resposta rápida, deixo o increment, mas o ideal seria uma Transaction se rigoroso.
+                
+            } catch (error) {
+                console.error("Erro ao atualizar stat:", error);
+            }
         }
 
         // --- Caixa (Mês + Global) ---
         
         function listenSaldoGlobal() {
             if (unsubSaldoGlobal) unsubSaldoGlobal();
-            
             const docRef = doc(db, 'stats', 'caixa_global');
-            
             unsubSaldoGlobal = onSnapshot(docRef, (docSnap) => {
                 const saldoEl = document.getElementById('caixa-total-geral');
                 if (docSnap.exists()) {
@@ -449,31 +564,20 @@
             await setDoc(docRef, { saldo: increment(valor) }, { merge: true });
         }
         
-        // NOVO: Função para recalcular o total geral baseando-se no ANO ATUAL
         async function recalculateGlobalTotal() {
             if (!confirm(`Isso vai recalcular o Total Geral somando todas as transações de Janeiro a Dezembro de ${selectedYear}. O valor atual será substituído. Continuar?`)) return;
-            
             const saldoEl = document.getElementById('caixa-total-geral');
             const originalText = saldoEl.innerHTML;
             saldoEl.innerHTML = "Calculando...";
-            
             let total = 0;
-            
-            // Loop pelos 12 meses do ano selecionado
             for (let m = 1; m <= 12; m++) {
                 const monthSuffix = `${selectedYear}_${String(m).padStart(2, '0')}`;
                 const colRef = collection(db, `caixa_${monthSuffix}`);
                 try {
                     const snapshot = await getDocs(colRef);
-                    snapshot.forEach(doc => {
-                        total += doc.data().valor;
-                    });
-                } catch (e) {
-                    // Ignora meses vazios ou sem permissão
-                }
+                    snapshot.forEach(doc => { total += doc.data().valor; });
+                } catch (e) {}
             }
-            
-            // Define o novo total
             try {
                 await setDoc(doc(db, 'stats', 'caixa_global'), { saldo: total });
                 alert("Sincronização concluída!");
@@ -532,21 +636,16 @@
             const descricao = form.descricao.value.trim();
             const valor = parseFloat(form.valor.value);
             if (!descricao || isNaN(valor) || valor === 0) return;
-            
             const collectionRef = getCollection(`caixa_${getMonthSuffix()}`);
             try {
-                // 1. Adiciona ao mês
                 await addDoc(collectionRef, { descricao: descricao, valor: valor, data: Timestamp.now() });
-                // 2. Atualiza o global
                 await updateSaldoGlobal(valor);
-                
                 form.reset();
             } catch (error) { console.error("Erro add caixa:", error); }
         }
         
         function setupForms() {
             document.getElementById('form-add-mensalista').addEventListener('submit', handleAddMensalista);
-            document.getElementById('form-add-proxima').addEventListener('submit', handleAddProxima);
             document.getElementById('form-add-caixa').addEventListener('submit', handleAddCaixa);
             updateUIVisibility();
         }
@@ -627,7 +726,8 @@
                 <div class="max-w-4xl mx-auto flex flex-wrap justify-center md:justify-start">
                     <button data-page="home" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="home" class="w-4 h-4"></i> Início</button>
                     <button data-page="mensalistas" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="users" class="w-4 h-4"></i> Mensalistas</button>
-                    <button data-page="proxima" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="calendar-plus" class="w-4 h-4"></i> Próxima Pelada</button>
+                    <!-- Mudança no texto do botão -->
+                    <button data-page="stats" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="trophy" class="w-4 h-4"></i> Estatísticas</button>
                     <button data-page="caixa" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="piggy-bank" class="w-4 h-4"></i> Caixa</button>
                 </div>
             </nav>
@@ -663,24 +763,31 @@
                 </div>
             </section>
 
-            <section id="page-proxima" class="page-section space-y-6">
+            <!-- NOVA SEÇÃO: ESTATÍSTICAS E RANKING -->
+            <section id="page-stats" class="page-section space-y-6">
+                
+                <!-- Parte 1: Ranking Geral do Mês -->
+                <div class="bg-white rounded-lg shadow overflow-hidden">
+                    <div class="p-6 border-b">
+                        <h2 id="ranking-title" class="text-2xl font-bold">Ranking Geral</h2>
+                    </div>
+                    <div id="ranking-container">
+                        <p class="p-4 text-gray-500">Carregando ranking...</p>
+                    </div>
+                </div>
+
+                <!-- Parte 2: Súmula por Dia -->
                 <div class="bg-white p-6 rounded-lg shadow">
                     <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
-                        <h2 id="proxima-pelada-title" class="text-2xl font-bold">Próxima Pelada</h2>
-                        <span id="player-count" class="text-lg text-gray-600 font-medium">(0 confirmados)</span>
+                        <h2 id="stats-date-title" class="text-xl font-bold">Súmula do Dia</h2>
                     </div>
                     <div id="pelada-selector-container" class="flex flex-wrap gap-2 mb-4"></div>
-                    <form id="form-add-proxima" class="admin-control grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
-                        <input type="text" name="nome" placeholder="Nome do jogador" class="md:col-span-2 p-2 border rounded-lg" required>
-                        <select name="tipo" class="p-2 border rounded-lg bg-white">
-                            <option value="Mensalista">Mensalista (R$ 12,25)</option>
-                            <option value="Avulso">Avulso (R$ 16,00)</option>
-                        </select>
-                        <button type="submit" class="md:col-span-3 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> Confirmar Presença</button>
-                    </form>
-                </div>
-                <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <div id="proxima-lista" class="p-4"><p>Carregando lista...</p></div>
+                    
+                    <div class="mt-4 border-t pt-4">
+                        <div id="sumula-lista" class="space-y-2">
+                             <p class="text-gray-500">Selecione uma data para ver/editar a súmula.</p>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -698,13 +805,11 @@
                 </div>
                 
                 <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <!-- CABEÇALHO DO CAIXA: Agora com Total Global e Botão de Sync -->
                     <div class="p-4 border-b bg-gray-50 flex flex-col md:flex-row justify-between gap-2 items-center">
                         <h3 id="caixa-saldo" class="text-lg font-semibold text-gray-800">Saldo (Mês): R$ 0,00</h3>
                         <div class="h-px bg-gray-300 md:w-px md:h-6 hidden md:block"></div>
                         <div class="flex items-center gap-2">
                             <h3 id="caixa-total-geral" class="text-lg font-bold text-blue-800">Total Geral: R$ 0,00</h3>
-                            <!-- NOVO: Botão de Sync (só para gerentes) -->
                             <button id="btn-sync-total" class="admin-control p-1 rounded-full text-blue-600 hover:bg-blue-100" title="Recalcular Total Geral">
                                 <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                             </button>
@@ -716,7 +821,7 @@
 
         </main>
         
-        <footer class="p-4 text-center text-sm text-gray-500 mt-8">App de Gestão da Pelada v6.0</footer>
+        <footer class="p-4 text-center text-sm text-gray-500 mt-8">App de Gestão da Pelada v7.0</footer>
     </div>
     <script>lucide.createIcons();</script>
 </body>
