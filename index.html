@@ -48,9 +48,9 @@
             getAuth, signInAnonymously, onAuthStateChanged, setPersistence, 
             inMemoryPersistence, signInWithEmailAndPassword, signOut 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // NOVO: Importei 'increment' para somar o saldo global
+        // NOVO: Importei 'getDocs' para poder recalcular o saldo lendo todas as coleções
         import { 
-            getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, 
+            getFirestore, doc, getDoc, getDocs, addDoc, setDoc, updateDoc, deleteDoc, 
             onSnapshot, collection, query, where, Timestamp, setLogLevel, increment
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
@@ -77,7 +77,7 @@
         let unsubMensalistas = null;
         let unsubProximaPelada = null;
         let unsubCaixa = null;
-        let unsubSaldoGlobal = null; // NOVO Listener
+        let unsubSaldoGlobal = null; 
         
         const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
@@ -111,7 +111,7 @@
                             listenMensalistas();
                             listenProximaPelada();
                             listenCaixa();
-                            listenSaldoGlobal(); // Recarrega saldo global
+                            listenSaldoGlobal(); 
                         }
                     } else {
                         signInAnonymously(auth);
@@ -132,7 +132,7 @@
             listenMensalistas();
             listenProximaPelada();
             listenCaixa();
-            listenSaldoGlobal(); // NOVO: Inicia listener do saldo total
+            listenSaldoGlobal(); 
 
             setupForms();
             
@@ -255,6 +255,9 @@
             document.getElementById('login-modal-backdrop').addEventListener('click', toggleLoginModal);
             document.getElementById('login-modal-close').addEventListener('click', toggleLoginModal);
             document.getElementById('login-form').addEventListener('submit', handleLogin);
+            
+            // NOVO: Listener para recalcular o total
+            document.getElementById('btn-sync-total').addEventListener('click', recalculateGlobalTotal);
         }
 
         function showPage(pageId) {
@@ -347,7 +350,6 @@
                     await updateSaldoGlobal(49.00);
                 } else if (currentStatus === 'Pago' && newStatus === 'Não') {
                      // Opcional: Se desfizer o pagamento, remove do Saldo Global?
-                     // Por simplicidade, vou apenas subtrair do global para manter coerência.
                      await updateSaldoGlobal(-49.00);
                 }
             } catch (error) {
@@ -425,11 +427,9 @@
 
         // --- Caixa (Mês + Global) ---
         
-        // NOVO: Função para escutar o saldo global (acumulado)
         function listenSaldoGlobal() {
             if (unsubSaldoGlobal) unsubSaldoGlobal();
             
-            // Usamos um documento específico 'caixa_global' na coleção 'stats'
             const docRef = doc(db, 'stats', 'caixa_global');
             
             unsubSaldoGlobal = onSnapshot(docRef, (docSnap) => {
@@ -444,11 +444,44 @@
             });
         }
         
-        // NOVO: Função auxiliar para atualizar o saldo global
         async function updateSaldoGlobal(valor) {
             const docRef = doc(db, 'stats', 'caixa_global');
-            // 'increment' soma atomicamente, evitando erros se dois gerentes editarem ao mesmo tempo
             await setDoc(docRef, { saldo: increment(valor) }, { merge: true });
+        }
+        
+        // NOVO: Função para recalcular o total geral baseando-se no ANO ATUAL
+        async function recalculateGlobalTotal() {
+            if (!confirm(`Isso vai recalcular o Total Geral somando todas as transações de Janeiro a Dezembro de ${selectedYear}. O valor atual será substituído. Continuar?`)) return;
+            
+            const saldoEl = document.getElementById('caixa-total-geral');
+            const originalText = saldoEl.innerHTML;
+            saldoEl.innerHTML = "Calculando...";
+            
+            let total = 0;
+            
+            // Loop pelos 12 meses do ano selecionado
+            for (let m = 1; m <= 12; m++) {
+                const monthSuffix = `${selectedYear}_${String(m).padStart(2, '0')}`;
+                const colRef = collection(db, `caixa_${monthSuffix}`);
+                try {
+                    const snapshot = await getDocs(colRef);
+                    snapshot.forEach(doc => {
+                        total += doc.data().valor;
+                    });
+                } catch (e) {
+                    // Ignora meses vazios ou sem permissão
+                }
+            }
+            
+            // Define o novo total
+            try {
+                await setDoc(doc(db, 'stats', 'caixa_global'), { saldo: total });
+                alert("Sincronização concluída!");
+            } catch (e) {
+                console.error("Erro ao salvar total:", e);
+                alert("Erro ao salvar total.");
+                saldoEl.innerHTML = originalText;
+            }
         }
 
         function listenCaixa() {
@@ -665,11 +698,17 @@
                 </div>
                 
                 <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <!-- CABEÇALHO DO CAIXA: Agora com Total Global -->
-                    <div class="p-4 border-b bg-gray-50 flex flex-col md:flex-row justify-between gap-2">
+                    <!-- CABEÇALHO DO CAIXA: Agora com Total Global e Botão de Sync -->
+                    <div class="p-4 border-b bg-gray-50 flex flex-col md:flex-row justify-between gap-2 items-center">
                         <h3 id="caixa-saldo" class="text-lg font-semibold text-gray-800">Saldo (Mês): R$ 0,00</h3>
-                        <div class="h-px bg-gray-300 md:w-px md:h-6"></div>
-                        <h3 id="caixa-total-geral" class="text-lg font-bold text-blue-800">Total Geral: R$ 0,00</h3>
+                        <div class="h-px bg-gray-300 md:w-px md:h-6 hidden md:block"></div>
+                        <div class="flex items-center gap-2">
+                            <h3 id="caixa-total-geral" class="text-lg font-bold text-blue-800">Total Geral: R$ 0,00</h3>
+                            <!-- NOVO: Botão de Sync (só para gerentes) -->
+                            <button id="btn-sync-total" class="admin-control p-1 rounded-full text-blue-600 hover:bg-blue-100" title="Recalcular Total Geral">
+                                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                            </button>
+                        </div>
                     </div>
                     <div id="caixa-lista" class="p-4"><p>Carregando transações...</p></div>
                 </div>
