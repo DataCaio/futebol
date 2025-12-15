@@ -27,27 +27,15 @@
             color: white;
         }
         
-        /* NOVO: Controles de Gerente (escondidos por padrão) */
-        .admin-control {
-            display: none;
-        }
+        .admin-control { display: none; }
         
-        /* NOVO: Modal de Login */
         #login-modal-backdrop {
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-            display: none; /* Inicia escondido */
-            z-index: 40;
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.5); display: none; z-index: 40;
         }
         #login-modal {
-            position: fixed;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            display: none; /* Inicia escondido */
-            z-index: 50;
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            display: none; z-index: 50;
         }
     </style>
 </head>
@@ -55,19 +43,18 @@
 
     <!-- Configuração do Firebase e Módulos -->
     <script type="module">
-        // Importações do Firebase
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        // NOVO: Importa funções de auth de email e logout
         import { 
             getAuth, signInAnonymously, onAuthStateChanged, setPersistence, 
             inMemoryPersistence, signInWithEmailAndPassword, signOut 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // NOVO: Importei 'increment' para somar o saldo global
         import { 
             getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, 
-            onSnapshot, collection, query, where, Timestamp, setLogLevel
+            onSnapshot, collection, query, where, Timestamp, setLogLevel, increment
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Your web app's Firebase configuration
+        // CONFIGURAÇÃO DO FIREBASE (MANTENHA SUAS CHAVES AQUI)
         const firebaseConfig = {
             apiKey: "AIzaSyAVfypZ0PfbOl-ijGoVkkB1MaK4_h-PNUQ",
             authDomain: "gestaopelada-b0dc4.firebaseapp.com",
@@ -79,133 +66,96 @@
 
         let db, auth;
         let userId = 'default-user';
-        
-        // --- NOVO: ESTADO DE GERENTE ---
         let isManager = false;
-        let appInitialized = false; // Flag para evitar recarregar tudo
+        let appInitialized = false;
         
-        // --- ESTADO GLOBAL DE DATA ---
         const today = new Date();
         let selectedYear = today.getFullYear();
-        let selectedMonth = today.getMonth() + 1; // 1 (Jan) - 12 (Dez)
-        let selectedPeladaDate = ""; // ex: "2025-11-17"
+        let selectedMonth = today.getMonth() + 1;
+        let selectedPeladaDate = "";
         
         let unsubMensalistas = null;
         let unsubProximaPelada = null;
         let unsubCaixa = null;
+        let unsubSaldoGlobal = null; // NOVO Listener
         
         const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
         const getMonthSuffix = () => `${selectedYear}_${String(selectedMonth).padStart(2, '0')}`;
-        
-        const getCollection = (collectionName) => {
-            return collection(db, collectionName);
-        }
+        const getCollection = (collectionName) => collection(db, collectionName);
         
         // --- Inicialização ---
         document.addEventListener('DOMContentLoaded', async () => {
             try {
                 setLogLevel('Debug');
-                
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                
                 await setPersistence(auth, inMemoryPersistence);
 
-                // --- LÓGICA DE AUTH ATUALIZADA ---
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
-                        // Verifica se o usuário é o Gerente ou Anônimo
                         if (user.isAnonymous) {
-                            console.log("Usuário anônimo conectado:", user.uid);
+                            console.log("Usuário anônimo conectado.");
                             isManager = false;
                         } else {
                             console.log("GERENTE conectado:", user.email);
                             isManager = true;
                         }
                         
-                        // O app é inicializado para AMBOS os tipos de usuário
-                        // A flag 'isManager' vai controlar o que é mostrado
                         if (!appInitialized) {
                             initializeAppListeners();
                             appInitialized = true;
                         } else {
-                            // Se o app já iniciou (ex: gerente logou),
-                            // apenas atualiza a UI e recarrega os dados
-                            // para mostrar os botões de admin
                             updateUIVisibility();
                             listenMensalistas();
                             listenProximaPelada();
                             listenCaixa();
+                            listenSaldoGlobal(); // Recarrega saldo global
                         }
-                        
                     } else {
-                        // Se o usuário deslogou (clicou em Sair), loga-o anonimamente
-                        console.log("Usuário deslogado, logando como anônimo.");
-                        signInAnonymously(auth); // Volta para o modo visualização
+                        signInAnonymously(auth);
                     }
                 });
-                
-                // Tenta o login anônimo ao carregar a página
                 await signInAnonymously(auth);
-
             } catch (error) {
-                console.error("Erro na inicialização do Firebase:", error);
-                document.getElementById('loading-global').innerHTML = '<p class="text-red-500">Erro ao conectar ao banco de dados.</p>';
+                console.error("Erro Firebase:", error);
+                document.getElementById('loading-global').innerHTML = '<p class="text-red-500">Erro de conexão.</p>';
             }
         });
 
-        // Inicia todos os listeners e a navegação
         function initializeAppListeners() {
             initNavigation();
-            
-            // Renderiza os seletores de data
             renderMonthSelectors();
-            renderPeladaSelectors(); // Isso vai definir a selectedPeladaDate inicial
+            renderPeladaSelectors();
             
-            // Inicia os listeners de dados em tempo real com o mês/semana padrão
             listenMensalistas();
             listenProximaPelada();
             listenCaixa();
+            listenSaldoGlobal(); // NOVO: Inicia listener do saldo total
 
-            // Configura os formulários
             setupForms();
             
-            // Esconde o carregamento global e mostra o app
             document.getElementById('loading-global').style.display = 'none';
             document.getElementById('app-container').style.display = 'block';
-            
-            // Mostra a página inicial
             showPage('home');
         }
 
-        // --- 1. Navegação (SPA) e Seletores de Data ---
-        
-        // NOVO: Mostra/esconde controles de admin
+        // --- UI Utils ---
         function updateUIVisibility() {
             const controls = document.querySelectorAll('.admin-control');
             const loginBtn = document.getElementById('login-btn');
             const logoutBtn = document.getElementById('logout-btn');
             
             if (isManager) {
-                // Mostra todos os controles de admin
-                controls.forEach(el => {
-                    // Tenta restaurar o display original (flex, grid) ou usa 'block'
-                    const originalDisplay = el.dataset.display || 'block';
-                    el.style.display = originalDisplay;
-                });
+                controls.forEach(el => el.style.display = el.dataset.display || 'block');
                 loginBtn.style.display = 'none';
-                logoutBtn.style.display = 'flex'; // 'flex' pois é um botão com ícone
+                logoutBtn.style.display = 'flex';
             } else {
-                // Esconde todos os controles de admin
                 controls.forEach(el => {
-                    // Guarda o display original antes de esconder
                     if (!el.dataset.display) {
                         const currentDisplay = window.getComputedStyle(el).display;
-                        if (currentDisplay !== 'none') {
-                            el.dataset.display = currentDisplay;
-                        }
+                        if (currentDisplay !== 'none') el.dataset.display = currentDisplay;
                     }
                     el.style.display = 'none';
                 });
@@ -215,7 +165,6 @@
         }
         
         function renderMonthSelectors() {
-            // ... (código existente, sem alterações) ...
             const container = document.getElementById('month-selector-container');
             let yearHtml = '<select id="year-select" class="p-2 border rounded-lg bg-white">';
             for (let y = today.getFullYear() - 1; y <= today.getFullYear() + 1; y++) {
@@ -232,19 +181,19 @@
             
             container.innerHTML = monthHtml + yearHtml;
             
-            document.getElementById('month-select').addEventListener('change', (e) => {
-                selectedMonth = parseInt(e.target.value);
+            const updateData = () => {
                 listenMensalistas();
                 listenCaixa();
                 updateSectionTitles();
+            };
+            document.getElementById('month-select').addEventListener('change', (e) => {
+                selectedMonth = parseInt(e.target.value);
+                updateData();
             });
             document.getElementById('year-select').addEventListener('change', (e) => {
                 selectedYear = parseInt(e.target.value);
-                listenMensalistas();
-                listenCaixa();
-                updateSectionTitles();
+                updateData();
             });
-            
             updateSectionTitles();
         }
         
@@ -255,13 +204,11 @@
         }
         
         function getNextMondays() {
-            // ... (código existente, sem alterações) ...
             let mondays = [];
             let date = new Date();
             let day = date.getDay();
             let add = (day === 1) ? 0 : (8 - day) % 7; 
             date.setDate(date.getDate() + add);
-
             for (let i = 0; i < 4; i++) {
                 let dateString = date.toISOString().split('T')[0];
                 let label = date.toLocaleDateString('pt-BR', { month: 'short', day: 'numeric' }); 
@@ -272,7 +219,6 @@
         }
 
         function renderPeladaSelectors() {
-            // ... (código existente, sem alterações) ...
             const container = document.getElementById('pelada-selector-container');
             const mondays = getNextMondays();
             selectedPeladaDate = mondays[0].dateString;
@@ -301,12 +247,9 @@
             lucide.createIcons();
             document.querySelectorAll('[data-page]').forEach(button => {
                 button.addEventListener('click', () => {
-                    const pageId = button.getAttribute('data-page');
-                    showPage(pageId);
+                    showPage(button.getAttribute('data-page'));
                 });
             });
-            
-            // NOVO: Listeners do Modal de Login
             document.getElementById('login-btn').addEventListener('click', toggleLoginModal);
             document.getElementById('logout-btn').addEventListener('click', handleLogout);
             document.getElementById('login-modal-backdrop').addEventListener('click', toggleLoginModal);
@@ -315,14 +258,10 @@
         }
 
         function showPage(pageId) {
-            // ... (código existente, sem alterações) ...
-            document.querySelectorAll('.page-section').forEach(section => {
-                section.classList.remove('active');
-            });
+            document.querySelectorAll('.page-section').forEach(section => section.classList.remove('active'));
             const activePage = document.getElementById(`page-${pageId}`);
-            if (activePage) {
-                activePage.classList.add('active');
-            }
+            if (activePage) activePage.classList.add('active');
+            
             document.querySelectorAll('[data-page]').forEach(button => {
                 button.classList.remove('bg-gray-700', 'text-white');
                 button.classList.add('text-gray-300', 'hover:bg-gray-700', 'hover:text-white');
@@ -333,21 +272,15 @@
             });
         }
         
-        // --- 3. Mensalistas (com lógica de pagamento) ---
+        // --- LOGICA DE DADOS ---
+
         function listenMensalistas() {
             if (unsubMensalistas) unsubMensalistas();
-            
-            const collectionName = `mensalistas_${getMonthSuffix()}`;
-            const collectionRef = getCollection(collectionName);
-            
+            const collectionRef = getCollection(`mensalistas_${getMonthSuffix()}`);
             unsubMensalistas = onSnapshot(collectionRef, (snapshot) => {
                 const mensalistas = [];
-                snapshot.forEach(doc => {
-                    mensalistas.push({ id: doc.id, ...doc.data() });
-                });
+                snapshot.forEach(doc => mensalistas.push({ id: doc.id, ...doc.data() }));
                 renderMensalistas(mensalistas);
-            }, (error) => {
-                console.error("Erro ao buscar mensalistas: ", error);
             });
         }
 
@@ -357,13 +290,10 @@
                 container.innerHTML = `<p class="text-gray-500">Nenhum mensalista cadastrado para ${meses[selectedMonth-1]}.</p>`;
                 return;
             }
-            
             let html = '<ul class="divide-y divide-gray-200">';
             mensalistas.forEach(player => {
                 const isPago = player.status === 'Pago';
                 const statusClass = isPago ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
-                
-                // NOVO: Botão de status só é renderizado para gerentes
                 let adminButtonHtml = '';
                 if (isManager) {
                     adminButtonHtml = `
@@ -372,14 +302,11 @@
                     </button>
                     `;
                 }
-                
                 html += `
                     <li class="p-4 flex justify-between items-center">
                         <span class="font-medium">${player.nome}</span>
                         <div class="flex items-center gap-2">
-                            <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">
-                                ${player.status}
-                            </span>
+                            <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${player.status}</span>
                             ${adminButtonHtml}
                         </div>
                     </li>
@@ -387,19 +314,11 @@
             });
             html += '</ul>';
             container.innerHTML = html;
-            
             lucide.createIcons();
-            
-            // Só adiciona listeners se os botões existirem (se for gerente)
-            if (isManager) {
-                document.querySelectorAll('.toggle-status-btn').forEach(button => {
-                    button.addEventListener('click', toggleMensalistaStatus);
-                });
-            }
+            if (isManager) document.querySelectorAll('.toggle-status-btn').forEach(btn => btn.addEventListener('click', toggleMensalistaStatus));
         }
         
         async function toggleMensalistaStatus(event) {
-            // ... (código existente, sem alterações) ...
             const button = event.currentTarget;
             const docId = button.dataset.id;
             const currentMonthSuffix = getMonthSuffix();
@@ -408,278 +327,221 @@
             try {
                 const docSnap = await getDoc(docRef);
                 if (!docSnap.exists()) return;
-                
                 const mensalista = docSnap.data();
                 const currentStatus = mensalista.status;
                 const newStatus = (currentStatus === 'Pago') ? 'Não' : 'Pago';
 
                 await updateDoc(docRef, { status: newStatus });
-                console.log(`Status do ${docId} atualizado para ${newStatus}`);
 
+                // Lógica de Pagamento Automático
                 if (currentStatus === 'Não' && newStatus === 'Pago') {
-                    console.log(`Adicionando R$ 49,00 ao caixa.`);
+                    // 1. Adiciona ao caixa do mês
                     const caixaCollectionRef = getCollection(`caixa_${currentMonthSuffix}`);
                     await addDoc(caixaCollectionRef, {
                         descricao: `Pagamento Mensal - ${mensalista.nome}`,
                         valor: 49.00,
                         data: Timestamp.now()
                     });
+                    
+                    // 2. NOVO: Incrementa o Saldo Global
+                    await updateSaldoGlobal(49.00);
+                } else if (currentStatus === 'Pago' && newStatus === 'Não') {
+                     // Opcional: Se desfizer o pagamento, remove do Saldo Global?
+                     // Por simplicidade, vou apenas subtrair do global para manter coerência.
+                     await updateSaldoGlobal(-49.00);
                 }
-                
             } catch (error) {
-                console.error("Erro ao atualizar status: ", error);
+                console.error("Erro status:", error);
             }
         }
         
         async function handleAddMensalista(event) {
-            // ... (código existente, sem alterações) ...
             event.preventDefault();
             const form = event.target;
             const nome = form.nome.value.trim();
             if (!nome) return;
-            
             const collectionRef = getCollection(`mensalistas_${getMonthSuffix()}`);
             try {
-                await addDoc(collectionRef, {
-                    nome: nome,
-                    status: "Não"
-                });
+                await addDoc(collectionRef, { nome: nome, status: "Não" });
                 form.reset();
-            } catch (error) {
-                console.error("Erro ao adicionar mensalista: ", error);
-            }
+            } catch (error) { console.error(error); }
         }
 
-        // --- 4. Próxima Pelada (por data) ---
+        // --- Próxima Pelada ---
         function listenProximaPelada() {
             if (unsubProximaPelada) unsubProximaPelada();
-            
-            const collectionName = `pelada_${selectedPeladaDate}`;
-            const collectionRef = getCollection(collectionName);
-            
+            const collectionRef = getCollection(`pelada_${selectedPeladaDate}`);
             unsubProximaPelada = onSnapshot(collectionRef, (snapshot) => {
                 const jogadores = [];
-                snapshot.forEach(doc => {
-                    jogadores.push({ id: doc.id, ...doc.data() });
-                });
+                snapshot.forEach(doc => jogadores.push({ id: doc.id, ...doc.data() }));
                 renderProximaPelada(jogadores);
-            }, (error) => {
-                console.error("Erro ao buscar próxima pelada: ", error);
             });
         }
         
         function renderProximaPelada(jogadores) {
             const container = document.getElementById('proxima-lista');
             document.getElementById('player-count').innerText = `(${jogadores.length} confirmados)`;
-            
             if (jogadores.length === 0) {
                 container.innerHTML = `<p class="text-gray-500">Ninguém confirmado para ${selectedPeladaDate}.</p>`;
                 return;
             }
-            
             let html = '<ul class="divide-y divide-gray-200">';
             jogadores.forEach(player => {
                 const tipoClass = player.tipo === 'Mensalista' ? 'text-blue-600' : 'text-orange-600';
-                
-                // NOVO: Botão de remover só é renderizado para gerentes
-                let adminButtonHtml = '';
-                if (isManager) {
-                    adminButtonHtml = `
+                let adminButtonHtml = isManager ? `
                     <button data-id="${player.id}" class="remove-player-btn p-2 rounded-full text-red-500 hover:bg-red-100">
                         <i data-lucide="x"></i>
-                    </button>
-                    `;
-                }
-                
+                    </button>` : '';
                 html += `
                     <li class="p-4 flex justify-between items-center">
-                        <div>
-                            <span class="font-medium">${player.nome}</span>
-                            <span class="ml-2 text-sm ${tipoClass}">(${player.tipo})</span>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <span class="font-semibold text-gray-700">R$ ${player.valor.toFixed(2).replace('.', ',')}</span>
-                            ${adminButtonHtml}
-                        </div>
+                        <div><span class="font-medium">${player.nome}</span><span class="ml-2 text-sm ${tipoClass}">(${player.tipo})</span></div>
+                        <div class="flex items-center gap-2"><span class="font-semibold text-gray-700">R$ ${player.valor.toFixed(2).replace('.', ',')}</span>${adminButtonHtml}</div>
                     </li>
                 `;
             });
             html += '</ul>';
             container.innerHTML = html;
-            
             lucide.createIcons();
-            
-            if (isManager) {
-                document.querySelectorAll('.remove-player-btn').forEach(button => {
-                    button.addEventListener('click', removePlayerProxima);
-                });
-            }
+            if (isManager) document.querySelectorAll('.remove-player-btn').forEach(btn => btn.addEventListener('click', removePlayerProxima));
         }
         
         async function handleAddProxima(event) {
-            // ... (código existente, sem alterações) ...
             event.preventDefault();
             const form = event.target;
             const nome = form.nome.value.trim();
             const tipo = form.tipo.value;
             if (!nome) return;
-            
             const valor = (tipo === 'Mensalista') ? 12.25 : 16.00;
             const collectionRef = getCollection(`pelada_${selectedPeladaDate}`);
-            
-            try {
-                await addDoc(collectionRef, { nome: nome, tipo: tipo, valor: valor });
-                form.reset();
-            } catch (error) {
-                console.error("Erro ao adicionar jogador: ", error);
-            }
+            try { await addDoc(collectionRef, { nome: nome, tipo: tipo, valor: valor }); form.reset(); } catch (error) { console.error(error); }
         }
         
         async function removePlayerProxima(event) {
-            // ... (código existente, sem alterações) ...
             const button = event.currentTarget;
             const docId = button.dataset.id;
             const docRef = doc(db, `pelada_${selectedPeladaDate}`, docId);
-            try {
-                await deleteDoc(docRef);
-            } catch (error) {
-                console.error("Erro ao remover jogador: ", error);
-            }
+            try { await deleteDoc(docRef); } catch (error) { console.error(error); }
         }
 
-        // --- 5. Caixa da Pelada (por mês) ---
+        // --- Caixa (Mês + Global) ---
+        
+        // NOVO: Função para escutar o saldo global (acumulado)
+        function listenSaldoGlobal() {
+            if (unsubSaldoGlobal) unsubSaldoGlobal();
+            
+            // Usamos um documento específico 'caixa_global' na coleção 'stats'
+            const docRef = doc(db, 'stats', 'caixa_global');
+            
+            unsubSaldoGlobal = onSnapshot(docRef, (docSnap) => {
+                const saldoEl = document.getElementById('caixa-total-geral');
+                if (docSnap.exists()) {
+                    const total = docSnap.data().saldo || 0;
+                    const saldoClass = total >= 0 ? 'text-green-600' : 'text-red-600';
+                    saldoEl.innerHTML = `Total Geral: <span class="font-bold ${saldoClass}">R$ ${total.toFixed(2).replace('.', ',')}</span>`;
+                } else {
+                    saldoEl.innerHTML = `Total Geral: <span class="font-bold text-gray-600">R$ 0,00</span>`;
+                }
+            });
+        }
+        
+        // NOVO: Função auxiliar para atualizar o saldo global
+        async function updateSaldoGlobal(valor) {
+            const docRef = doc(db, 'stats', 'caixa_global');
+            // 'increment' soma atomicamente, evitando erros se dois gerentes editarem ao mesmo tempo
+            await setDoc(docRef, { saldo: increment(valor) }, { merge: true });
+        }
+
         function listenCaixa() {
             if (unsubCaixa) unsubCaixa();
-            
-            const collectionName = `caixa_${getMonthSuffix()}`;
-            const collectionRef = getCollection(collectionName);
-            
+            const collectionRef = getCollection(`caixa_${getMonthSuffix()}`);
             unsubCaixa = onSnapshot(collectionRef, (snapshot) => {
                 const transacoes = [];
-                snapshot.forEach(doc => {
-                    transacoes.push({ id: doc.id, ...doc.data() });
-                });
+                snapshot.forEach(doc => transacoes.push({ id: doc.id, ...doc.data() }));
                 transacoes.sort((a, b) => (b.data?.seconds || 0) - (a.data?.seconds || 0));
                 renderCaixa(transacoes);
-            }, (error) => {
-                console.error("Erro ao buscar caixa: ", error);
             });
         }
         
         function renderCaixa(transacoes) {
             const container = document.getElementById('caixa-lista');
             const saldoEl = document.getElementById('caixa-saldo');
-            
             let saldo = 0;
             let html = '<ul class="divide-y divide-gray-200">';
-            
             if (transacoes.length === 0) {
                 html = `<p class="text-gray-500">Nenhuma transação registrada para ${meses[selectedMonth-1]}.</p>`;
             } else {
                 transacoes.forEach(t => {
-                    // ... (código existente, sem alterações) ...
                     const isEntrada = t.valor > 0;
                     const valorClass = isEntrada ? 'text-green-600' : 'text-red-600';
                     const icon = isEntrada ? 'plus' : 'minus';
-                    
                     html += `
                         <li class="p-4 flex justify-between items-center">
                             <div class="flex items-center gap-3">
                                 <i data-lucide="${icon}" class="${valorClass}"></i>
                                 <span>${t.descricao}</span>
                             </div>
-                            <span class="font-semibold ${valorClass}">
-                                ${isEntrada ? '+' : ''} R$ ${Math.abs(t.valor).toFixed(2).replace('.', ',')}
-                            </span>
+                            <span class="font-semibold ${valorClass}">${isEntrada ? '+' : ''} R$ ${Math.abs(t.valor).toFixed(2).replace('.', ',')}</span>
                         </li>
                     `;
                     saldo += t.valor;
                 });
                 html += '</ul>';
             }
-            
             container.innerHTML = html;
-            
             const saldoClass = saldo >= 0 ? 'text-green-600' : 'text-red-600';
-            saldoEl.innerHTML = `Saldo Final: <span class="font-bold ${saldoClass}">R$ ${saldo.toFixed(2).replace('.', ',')}</span>`;
-            
+            saldoEl.innerHTML = `Saldo (Mês): <span class="font-bold ${saldoClass}">R$ ${saldo.toFixed(2).replace('.', ',')}</span>`;
             lucide.createIcons();
         }
         
         async function handleAddCaixa(event) {
-            // ... (código existente, sem alterações) ...
             event.preventDefault();
             const form = event.target;
             const descricao = form.descricao.value.trim();
             const valor = parseFloat(form.valor.value);
-            
             if (!descricao || isNaN(valor) || valor === 0) return;
             
             const collectionRef = getCollection(`caixa_${getMonthSuffix()}`);
             try {
-                await addDoc(collectionRef, {
-                    descricao: descricao,
-                    valor: valor,
-                    data: Timestamp.now()
-                });
+                // 1. Adiciona ao mês
+                await addDoc(collectionRef, { descricao: descricao, valor: valor, data: Timestamp.now() });
+                // 2. Atualiza o global
+                await updateSaldoGlobal(valor);
+                
                 form.reset();
-            } catch (error) {
-                console.error("Erro ao adicionar transação: ", error);
-            }
+            } catch (error) { console.error("Erro add caixa:", error); }
         }
         
-        // --- Configuração dos Formulários e Modal ---
         function setupForms() {
             document.getElementById('form-add-mensalista').addEventListener('submit', handleAddMensalista);
             document.getElementById('form-add-proxima').addEventListener('submit', handleAddProxima);
             document.getElementById('form-add-caixa').addEventListener('submit', handleAddCaixa);
-            
-            // NOVO: Chama a função para esconder/mostrar os formulários
             updateUIVisibility();
         }
-        
-        // --- NOVO: Funções de Login/Logout ---
         
         function toggleLoginModal() {
             const backdrop = document.getElementById('login-modal-backdrop');
             const modal = document.getElementById('login-modal');
-            const errorMsg = document.getElementById('login-error');
-            
             const isHidden = backdrop.style.display === 'none' || backdrop.style.display === '';
             backdrop.style.display = isHidden ? 'block' : 'none';
             modal.style.display = isHidden ? 'block' : 'none';
-            errorMsg.style.display = 'none'; // Sempre esconde o erro ao abrir/fechar
+            document.getElementById('login-error').style.display = 'none';
         }
         
         async function handleLogin(event) {
             event.preventDefault();
-            const email = event.target.email.value;
-            const password = event.target.password.value;
-            const errorMsg = document.getElementById('login-error');
-            
             try {
-                await signInWithEmailAndPassword(auth, email, password);
-                // Sucesso!
-                toggleLoginModal(); // Fecha o modal
-                event.target.reset(); // Limpa o formulário
-                // O 'onAuthStateChanged' vai cuidar do resto (mudar isManager, recarregar UI)
-                
+                await signInWithEmailAndPassword(auth, event.target.email.value, event.target.password.value);
+                toggleLoginModal();
+                event.target.reset();
             } catch (error) {
-                console.error("Erro de login:", error.code);
+                const errorMsg = document.getElementById('login-error');
                 errorMsg.innerText = "Email ou senha incorretos.";
                 errorMsg.style.display = 'block';
             }
         }
         
         async function handleLogout() {
-            try {
-                await signOut(auth);
-                // O 'onAuthStateChanged' vai detectar o logout e
-                // automaticamente logar o usuário como anônimo.
-                console.log("Gerente deslogado.");
-            } catch (error) {
-                console.error("Erro ao sair:", error);
-            }
+            try { await signOut(auth); } catch (error) { console.error(error); }
         }
 
     </script>
@@ -692,14 +554,12 @@
         </div>
     </div>
     
-    <!-- NOVO: Modal de Login (Escondido) -->
+    <!-- Modal de Login -->
     <div id="login-modal-backdrop"></div>
     <div id="login-modal" class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm">
         <div class="flex justify-between items-center mb-4">
             <h3 class="text-xl font-bold">Login de Gerente</h3>
-            <button id="login-modal-close" class="p-1 rounded-full hover:bg-gray-200">
-                <i data-lucide="x" class="w-5 h-5"></i>
-            </button>
+            <button id="login-modal-close" class="p-1 rounded-full hover:bg-gray-200"><i data-lucide="x" class="w-5 h-5"></i></button>
         </div>
         <form id="login-form">
             <div class="mb-4">
@@ -711,157 +571,114 @@
                 <input type="password" id="password" name="password" class="mt-1 p-2 w-full border rounded-lg" required>
             </div>
             <p id="login-error" class="text-red-500 text-sm mb-4" style="display: none;"></p>
-            <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
-                Entrar
-            </button>
+            <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">Entrar</button>
         </form>
     </div>
 
-    <!-- Container Principal do App (inicia escondido) -->
+    <!-- Container Principal do App -->
     <div id="app-container" style="display: none;">
         
         <header class="bg-gray-800 text-white shadow-md">
             <div class="max-w-4xl mx-auto p-4 flex justify-between items-center">
                 <h1 class="text-xl md:text-2xl font-bold">Gestão da Pelada ⚽</h1>
-                <!-- NOVO: Botões de Login/Logout -->
                 <div>
                     <button id="login-btn" class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg hover:bg-gray-700">
-                        <i data-lucide="log-in" class="w-4 h-4"></i> restrict area
+                        <i data-lucide="log-in" class="w-4 h-4"></i> Login
                     </button>
                     <button id="logout-btn" class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg hover:bg-red-600" style="display: none;">
                         <i data-lucide="log-out" class="w-4 h-4"></i> Sair
                     </button>
                 </div>
             </div>
-            <!-- Menu de Navegação -->
             <nav class="bg-gray-700">
                 <div class="max-w-4xl mx-auto flex flex-wrap justify-center md:justify-start">
-                    <button data-page="home" class="flex items-center gap-2 px-4 py-3 text-sm font-medium">
-                        <i data-lucide="home" class="w-4 h-4"></i> Início
-                    </button>
-                    <button data-page="mensalistas" class="flex items-center gap-2 px-4 py-3 text-sm font-medium">
-                        <i data-lucide="users" class="w-4 h-4"></i> Mensalistas
-                    </button>
-                    <button data-page="proxima" class="flex items-center gap-2 px-4 py-3 text-sm font-medium">
-                        <i data-lucide="calendar-plus" class="w-4 h-4"></i> Próxima Pelada
-                    </button>
-                    <button data-page="caixa" class="flex items-center gap-2 px-4 py-3 text-sm font-medium">
-                        <i data-lucide="piggy-bank" class="w-4 h-4"></i> Caixa
-                    </button>
+                    <button data-page="home" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="home" class="w-4 h-4"></i> Início</button>
+                    <button data-page="mensalistas" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="users" class="w-4 h-4"></i> Mensalistas</button>
+                    <button data-page="proxima" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="calendar-plus" class="w-4 h-4"></i> Próxima Pelada</button>
+                    <button data-page="caixa" class="flex items-center gap-2 px-4 py-3 text-sm font-medium"><i data-lucide="piggy-bank" class="w-4 h-4"></i> Caixa</button>
                 </div>
             </nav>
         </header>
 
         <main class="max-w-4xl mx-auto p-4 md:p-6">
 
-            <!-- ========= SEÇÃO 0: INÍCIO ========= -->
             <section id="page-home" class="page-section active">
                 <div class="bg-white p-6 rounded-lg shadow">
                     <h2 class="text-2xl font-bold mb-4">Peladinha Onofre e Amigos</h2>
                     <p class="text-gray-700">
                       ⚽ <strong>Localização:</strong> Arena FUT7 Universitário<br>
-                      📍 <strong>Endereço:</strong> Av. Bueno Siqueira, 116 - Universitário, Belo Horizonte - MG, 31255-430<br>
+                      📍 <strong>Endereço:</strong> Av. Bueno Siqueira, 116 - Universitário, Belo Horizonte - MG<br>
                       ⏰ <strong>Horário:</strong> Segunda-feira 20:00–21:00
                     </p>
-                    <p class="mt-4 text-sm text-gray-500">
-                        Todos os dados são salvos em tempo real. Faça login como gerente para editar.
-                    </p>
+                    <p class="mt-4 text-sm text-gray-500">Faça login como gerente para editar.</p>
                 </div>
             </section>
 
-            <!-- ========= SEÇÃO 1: MENSALISTAS ========= -->
             <section id="page-mensalistas" class="page-section space-y-6">
                 <div class="bg-white p-6 rounded-lg shadow">
                     <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                         <h2 id="mensalistas-title" class="text-2xl font-bold">Mensalistas</h2>
-                        <div id="month-selector-container" class="flex gap-2">
-                        </div>
+                        <div id="month-selector-container" class="flex gap-2"></div>
                     </div>
-                    
-                    <!-- NOVO: Adicionada classe admin-control -->
                     <form id="form-add-mensalista" class="admin-control flex gap-2 mb-4">
                         <input type="text" name="nome" placeholder="Nome do mensalista" class="flex-grow p-2 border rounded-lg" required>
-                        <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2">
-                            <i data-lucide="plus" class="w-4 h-4"></i> Adicionar
-                        </button>
+                        <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> Adicionar</button>
                     </form>
                 </div>
-                
                 <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <div id="mensalistas-container" class="p-4">
-                        <p>Carregando mensalistas...</p>
-                    </div>
+                    <div id="mensalistas-container" class="p-4"><p>Carregando mensalistas...</p></div>
                 </div>
             </section>
 
-            <!-- ========= SEÇÃO 2: PRÓXIMA PELADA ========= -->
             <section id="page-proxima" class="page-section space-y-6">
                 <div class="bg-white p-6 rounded-lg shadow">
                     <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                         <h2 id="proxima-pelada-title" class="text-2xl font-bold">Próxima Pelada</h2>
                         <span id="player-count" class="text-lg text-gray-600 font-medium">(0 confirmados)</span>
                     </div>
-                    <div id="pelada-selector-container" class="flex flex-wrap gap-2 mb-4">
-                    </div>
-                    
-                    <!-- NOVO: Adicionada classe admin-control -->
+                    <div id="pelada-selector-container" class="flex flex-wrap gap-2 mb-4"></div>
                     <form id="form-add-proxima" class="admin-control grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
                         <input type="text" name="nome" placeholder="Nome do jogador" class="md:col-span-2 p-2 border rounded-lg" required>
                         <select name="tipo" class="p-2 border rounded-lg bg-white">
                             <option value="Mensalista">Mensalista (R$ 12,25)</option>
                             <option value="Avulso">Avulso (R$ 16,00)</option>
                         </select>
-                        <button type="submit" class="md:col-span-3 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2">
-                            <i data-lucide="plus" class="w-4 h-4"></i> Confirmar Presença
-                        </button>
+                        <button type="submit" class="md:col-span-3 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> Confirmar Presença</button>
                     </form>
                 </div>
-                
                 <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <div id="proxima-lista" class="p-4">
-                        <p>Carregando lista...</p>
-                    </div>
+                    <div id="proxima-lista" class="p-4"><p>Carregando lista...</p></div>
                 </div>
             </section>
 
-            <!-- ========= SEÇÃO 3: CAIXA DA PELADA ========= -->
             <section id="page-caixa" class="page-section space-y-6">
                 <div class="bg-white p-6 rounded-lg shadow">
                      <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                         <h2 id="caixa-title" class="text-2xl font-bold">Caixa</h2>
                     </div>
                     
-                    <!-- NOVO: Adicionada classe admin-control -->
                     <form id="form-add-caixa" class="admin-control flex flex-col gap-2 mb-4">
                         <input type="text" name="descricao" placeholder="Descrição (ex: Pagamento, Compra de bolas)" class="p-2 border rounded-lg" required>
                         <input type="number" name="valor" step="0.01" placeholder="Valor (use negativo para saídas, ex: -50.00)" class="p-2 border rounded-lg" required>
-                        <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2">
-                            <i data-lucide="save" class="w-4 h-4"></i> Registrar Transação
-                        </button>
+                        <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Registrar Transação</button>
                     </form>
                 </div>
                 
                 <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <div class="p-4 border-b">
-                        <h3 id="caixa-saldo" class="text-xl font-semibold text-gray-800">Saldo Final: R$ 0,00</h3>
+                    <!-- CABEÇALHO DO CAIXA: Agora com Total Global -->
+                    <div class="p-4 border-b bg-gray-50 flex flex-col md:flex-row justify-between gap-2">
+                        <h3 id="caixa-saldo" class="text-lg font-semibold text-gray-800">Saldo (Mês): R$ 0,00</h3>
+                        <div class="h-px bg-gray-300 md:w-px md:h-6"></div>
+                        <h3 id="caixa-total-geral" class="text-lg font-bold text-blue-800">Total Geral: R$ 0,00</h3>
                     </div>
-                    <div id="caixa-lista" class="p-4">
-                        <p>Carregando transações...</p>
-                    </div>
+                    <div id="caixa-lista" class="p-4"><p>Carregando transações...</p></div>
                 </div>
             </section>
 
         </main>
         
-        <footer class="p-4 text-center text-sm text-gray-500 mt-8">
-            App de Gestão da Pelada v5.0 (Final)
-        </footer>
+        <footer class="p-4 text-center text-sm text-gray-500 mt-8">App de Gestão da Pelada v6.0</footer>
     </div>
-    
-    <!-- Script para carregar ícones -->
-    <script>
-      lucide.createIcons();
-    </script>
-
+    <script>lucide.createIcons();</script>
 </body>
 </html>
